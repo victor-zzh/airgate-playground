@@ -1,0 +1,23 @@
+# Build outputs
+*.exe
+/backend/backend
+/backend/airgate-playground
+/bin/
+
+# Runtime data
+/backend/devdata/
+
+# Frontend
+/web/node_modules/
+/web/dist/
+
+# Embedded frontend assets
+!backend/internal/playground/webdist/
+backend/internal/playground/webdist/*
+!backend/internal/playground/webdist/index.js
+
+# Local tooling
+.claude/settings.local.json
+go.work
+go.work.sum
+.DS_Store
