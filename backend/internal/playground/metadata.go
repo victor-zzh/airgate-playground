@@ -7,7 +7,7 @@ var PluginVersion = "0.1.0"
 func BuildPluginInfo() sdk.PluginInfo {
 	return sdk.PluginInfo{
 		ID:          "airgate-playground",
-		Name:        "AI Playground",
+		Name:        "AI Chat",
 		Version:     PluginVersion,
 		SDKVersion:  sdk.SDKVersion,
 		Description: "Web-based AI chat playground with multi-model support and conversation management",
@@ -22,7 +22,7 @@ func BuildPluginInfo() sdk.PluginInfo {
 		FrontendPages: []sdk.FrontendPage{
 			{
 				Path:        "/playground",
-				Title:       "AI Playground",
+				Title:       "playground.title",
 				Icon:        "message-square",
 				Description: "AI chat playground",
 				Audience:    "all",
