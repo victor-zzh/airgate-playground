@@ -23,6 +23,7 @@ type Message struct {
 	ConversationID int64     `json:"conversation_id"`
 	Role           string    `json:"role"`
 	Content        string    `json:"content"`
+	Reasoning      string    `json:"reasoning,omitempty"`
 	Platform       string    `json:"platform,omitempty"`
 	Model          string    `json:"model,omitempty"`
 	GroupID        int64     `json:"group_id,omitempty"`
@@ -52,6 +53,7 @@ func migrate(db *sql.DB) error {
 			conversation_id BIGINT NOT NULL REFERENCES playground_conversations(id) ON DELETE CASCADE,
 			role            TEXT NOT NULL,
 			content         TEXT NOT NULL DEFAULT '',
+				reasoning       TEXT NOT NULL DEFAULT '',
 			platform        TEXT NOT NULL DEFAULT '',
 			model           TEXT NOT NULL DEFAULT '',
 			group_id        BIGINT NOT NULL DEFAULT 0,
@@ -61,7 +63,9 @@ func migrate(db *sql.DB) error {
 			created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 
-		CREATE INDEX IF NOT EXISTS idx_playground_msg_conv ON playground_messages(conversation_id, created_at);
+		ALTER TABLE playground_messages ADD COLUMN IF NOT EXISTS reasoning TEXT NOT NULL DEFAULT '';
+
+			CREATE INDEX IF NOT EXISTS idx_playground_msg_conv ON playground_messages(conversation_id, created_at);
 	`)
 	return err
 }

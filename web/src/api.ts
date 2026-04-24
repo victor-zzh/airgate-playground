@@ -62,6 +62,7 @@ export interface Message {
   conversation_id: number;
   role: string;
   content: string;
+  reasoning?: string;
   platform: string;
   model: string;
   group_id: number;
@@ -71,11 +72,6 @@ export interface Message {
   created_at: string;
 }
 
-export interface Platform {
-  Name: string;
-  DisplayName: string;
-}
-
 export interface ModelInfo {
   id: string;
   name: string;
@@ -83,6 +79,23 @@ export interface ModelInfo {
   output_price: number;
   context_window: number;
   max_output_tokens: number;
+  image_only?: boolean;
+  capabilities?: string[];
+}
+
+interface ProviderModelInfo {
+  id: string;
+  name?: string;
+  input_price?: number;
+  output_price?: number;
+  context_window?: number;
+  max_output_tokens?: number;
+  image_only?: boolean;
+  capabilities?: string[];
+}
+
+interface ProviderModelListResponse {
+  data?: ProviderModelInfo[];
 }
 
 export interface UserInfo {
@@ -101,6 +114,7 @@ export interface PersistedMessageRequest {
   conversation_id: number;
   role: string;
   content: string;
+  reasoning?: string;
   platform?: string;
   model?: string;
   group_id?: number;
@@ -131,8 +145,14 @@ export interface PagedResponse<T> {
   page_size: number;
 }
 
+export type ChatMessageContent = string | Array<
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+>;
+
 export interface ChatCompletionCallbacks {
   onData: (text: string) => void;
+  onReasoning: (text: string) => void;
   onDone: (usage: { input_tokens: number; output_tokens: number; model: string; cost: number }) => void;
   onError: (err: string) => void;
 }
@@ -157,9 +177,34 @@ export const api = {
 
   persistMessage: (data: PersistedMessageRequest) => request<Message>('POST', '/messages', data),
 
-  listPlatforms: () => request<Platform[]>('GET', '/platforms'),
+  listModelsByAPIKey: async (apiKey: string) => {
+    const resp = await fetch('/v1/models', {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    });
 
-  listModels: (platform: string) => request<ModelInfo[]>('GET', `/models?platform=${encodeURIComponent(platform)}`),
+    if (!resp.ok) {
+      const text = await resp.text();
+      let msg = `HTTP ${resp.status}`;
+      try {
+        const parsed = JSON.parse(text);
+        msg = parsed.error?.message || parsed.error || parsed.message || msg;
+      } catch { /* ignore */ }
+      throw new Error(msg);
+    }
+
+    const payload = await resp.json() as ProviderModelListResponse | ProviderModelInfo[];
+    const data = Array.isArray(payload) ? payload : payload.data || [];
+    return data.map(item => ({
+      id: item.id,
+      name: item.name || item.id,
+      input_price: item.input_price || 0,
+      output_price: item.output_price || 0,
+      context_window: item.context_window || 0,
+      max_output_tokens: item.max_output_tokens || 0,
+      image_only: Boolean(item.image_only),
+      capabilities: item.capabilities || [],
+    }));
+  },
 
   getUserInfo: () => coreRequest<UserInfo>('GET', '/users/me'),
 
@@ -174,8 +219,9 @@ export async function chatCompletionsStream(
   apiKey: string,
   body: {
     model: string;
-    messages: Array<{ role: string; content: string }>;
+    messages: Array<{ role: string; content: ChatMessageContent }>;
     stream: true;
+    reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
     stream_options?: { include_usage?: boolean };
   },
   callbacks: ChatCompletionCallbacks,
@@ -239,7 +285,10 @@ export async function chatCompletionsStream(
             callbacks.onError(parsed.error.message || parsed.error);
             return;
           }
-          const delta = parsed.choices?.[0]?.delta?.content;
+          const choiceDelta = parsed.choices?.[0]?.delta;
+          const reasoningDelta = choiceDelta?.reasoning_content;
+          if (reasoningDelta) callbacks.onReasoning(reasoningDelta);
+          const delta = choiceDelta?.content;
           if (delta) callbacks.onData(delta);
           if (parsed.usage) {
             usage = {

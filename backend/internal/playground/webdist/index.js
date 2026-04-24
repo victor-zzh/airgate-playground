@@ -1,7 +1,7 @@
-import { jsxs as a, jsx as n, Fragment as Z } from "react/jsx-runtime";
-import { useState as h, useRef as ee, useEffect as R, useCallback as T } from "react";
-import { useTranslation as Ce } from "react-i18next";
-const ce = {
+import { jsxs as d, jsx as r, Fragment as be } from "react/jsx-runtime";
+import { useState as w, useRef as J, useEffect as Y, useCallback as H } from "react";
+import { useTranslation as Qe } from "react-i18next";
+const Re = {
   primary: "#3ecfb4",
   primaryHover: "#62dcc4",
   primarySubtle: "rgba(62, 207, 180, 0.08)",
@@ -36,7 +36,7 @@ const ce = {
   shadowMd: "0 8px 24px rgba(0, 0, 0, 0.48)",
   shadowLg: "0 20px 48px rgba(0, 0, 0, 0.60)",
   shadowGlow: "0 0 0 1px rgba(62, 207, 180, 0.08), 0 8px 32px rgba(62, 207, 180, 0.10)"
-}, Be = {
+}, Ze = {
   radiusSm: "12px",
   radiusMd: "18px",
   radiusLg: "22px",
@@ -45,576 +45,881 @@ const ce = {
   fontMono: "'JetBrains Mono', 'SF Mono', 'Cascadia Code', monospace",
   transition: "200ms cubic-bezier(0.4, 0, 0.2, 1)",
   transitionSlow: "400ms cubic-bezier(0.4, 0, 0.2, 1)"
-}, Te = {
+}, et = {
   sidebarWidth: "260px",
   sidebarCollapsed: "72px",
   topbarHeight: "64px"
-}, te = {
-  ...Be,
-  ...Te
-}, pe = {
-  dark: ce
+}, xe = {
+  ...Ze,
+  ...et
+}, $e = {
+  dark: Re
 };
-function Ie(o) {
-  return o.replace(/[A-Z]/g, (l) => "-" + l.toLowerCase());
+function tt(n) {
+  return n.replace(/[A-Z]/g, (a) => "-" + a.toLowerCase());
 }
-function ue(o = "ag") {
-  return o.trim() || "ag";
+function Ae(n = "ag") {
+  return n.trim() || "ag";
 }
-function U(o, l) {
-  return `--${o}-${Ie(l)}`;
+function ue(n, a) {
+  return `--${n}-${tt(a)}`;
 }
-Object.keys(pe.dark).reduce((o, l) => (o[l] = U("ag", l), o), {});
-Object.keys(te).reduce((o, l) => (o[l] = U("ag", l), o), {});
-function ge(o = {}) {
-  const l = ue(o.prefix);
-  return Object.keys(pe.dark).reduce((p, s) => (p[s] = U(l, s), p), {});
+Object.keys($e.dark).reduce((n, a) => (n[a] = ue("ag", a), n), {});
+Object.keys(xe).reduce((n, a) => (n[a] = ue("ag", a), n), {});
+function ze(n = {}) {
+  const a = Ae(n.prefix);
+  return Object.keys($e.dark).reduce((o, s) => (o[s] = ue(a, s), o), {});
 }
-function he(o = {}) {
-  const l = ue(o.prefix);
-  return Object.keys(te).reduce((p, s) => (p[s] = U(l, s), p), {});
+function He(n = {}) {
+  const a = Ae(n.prefix);
+  return Object.keys(xe).reduce((o, s) => (o[s] = ue(a, s), o), {});
 }
-const Le = ge(), ze = he();
-function r(o, l = {}) {
-  const p = l.prefix ? ge(l) : Le, s = l.prefix ? he(l) : ze;
-  if (o in p) {
-    const y = o;
-    return `var(${p[y]}, ${ce[y]})`;
+const nt = ze(), rt = He();
+function i(n, a = {}) {
+  const o = a.prefix ? ze(a) : nt, s = a.prefix ? He(a) : rt;
+  if (n in o) {
+    const l = n;
+    return `var(${o[l]}, ${Re[l]})`;
   }
-  const m = o;
-  return `var(${s[m]}, ${te[m]})`;
+  const p = n;
+  return `var(${s[p]}, ${xe[p]})`;
 }
-const De = "/api/v1/ext-user/airgate-playground", Ae = "/api/v1";
-function Re() {
-  const o = {}, l = localStorage.getItem("token");
-  return l && (o.Authorization = `Bearer ${l}`), o;
+const it = "/api/v1/ext-user/airgate-playground", ot = "/api/v1";
+function at() {
+  const n = {}, a = localStorage.getItem("token");
+  return a && (n.Authorization = `Bearer ${a}`), n;
 }
-async function _(o, l, p, s = De) {
-  const m = { ...Re() };
-  p !== void 0 && (m["Content-Type"] = "application/json");
-  const y = await fetch(s + l, {
-    method: o,
-    headers: m,
-    body: p ? JSON.stringify(p) : void 0
+async function K(n, a, o, s = it) {
+  const p = { ...at() };
+  o !== void 0 && (p["Content-Type"] = "application/json");
+  const l = await fetch(s + a, {
+    method: n,
+    headers: p,
+    body: o ? JSON.stringify(o) : void 0
   });
-  if (!y.ok) {
-    const v = await y.text();
-    let f = `HTTP ${y.status}`;
+  if (!l.ok) {
+    const C = await l.text();
+    let v = `HTTP ${l.status}`;
     try {
-      const w = JSON.parse(v);
-      f = w.error || w.message || f;
+      const b = JSON.parse(C);
+      v = b.error || b.message || v;
     } catch {
     }
-    throw y.status === 401 && (localStorage.removeItem("token"), window.location.href = "/login"), new Error(f);
+    throw l.status === 401 && (localStorage.removeItem("token"), window.location.href = "/login"), new Error(v);
   }
-  const k = await y.text();
-  return k ? JSON.parse(k) : null;
+  const m = await l.text();
+  return m ? JSON.parse(m) : null;
 }
-async function F(o, l, p) {
-  const s = await _(o, l, p, Ae);
+async function ce(n, a, o) {
+  const s = await K(n, a, o, ot);
   if (s.code !== 0)
     throw new Error(s.message || "request failed");
   return s.data;
 }
-const S = {
-  listConversations: () => _("GET", "/conversations"),
-  createConversation: (o) => _("POST", "/conversations", o),
-  getConversation: (o) => _("GET", `/conversations/${o}`),
-  updateConversation: (o, l) => _("PUT", `/conversations/${o}`, l),
-  deleteConversation: (o) => _("DELETE", `/conversations/${o}`),
-  listMessages: (o) => _("GET", `/messages/${o}`),
-  persistMessage: (o) => _("POST", "/messages", o),
-  listPlatforms: () => _("GET", "/platforms"),
-  listModels: (o) => _("GET", `/models?platform=${encodeURIComponent(o)}`),
-  getUserInfo: () => F("GET", "/users/me"),
-  listAPIKeys: () => F("GET", "/api-keys?page=1&page_size=100"),
-  revealAPIKey: (o) => F("GET", `/api-keys/${o}/reveal`),
-  listGroups: () => F("GET", "/groups?page=1&page_size=100")
+const D = {
+  listConversations: () => K("GET", "/conversations"),
+  createConversation: (n) => K("POST", "/conversations", n),
+  getConversation: (n) => K("GET", `/conversations/${n}`),
+  updateConversation: (n, a) => K("PUT", `/conversations/${n}`, a),
+  deleteConversation: (n) => K("DELETE", `/conversations/${n}`),
+  listMessages: (n) => K("GET", `/messages/${n}`),
+  persistMessage: (n) => K("POST", "/messages", n),
+  listModelsByAPIKey: async (n) => {
+    var p;
+    const a = await fetch("/v1/models", {
+      headers: { Authorization: `Bearer ${n}` }
+    });
+    if (!a.ok) {
+      const l = await a.text();
+      let m = `HTTP ${a.status}`;
+      try {
+        const C = JSON.parse(l);
+        m = ((p = C.error) == null ? void 0 : p.message) || C.error || C.message || m;
+      } catch {
+      }
+      throw new Error(m);
+    }
+    const o = await a.json();
+    return (Array.isArray(o) ? o : o.data || []).map((l) => ({
+      id: l.id,
+      name: l.name || l.id,
+      input_price: l.input_price || 0,
+      output_price: l.output_price || 0,
+      context_window: l.context_window || 0,
+      max_output_tokens: l.max_output_tokens || 0,
+      image_only: !!l.image_only,
+      capabilities: l.capabilities || []
+    }));
+  },
+  getUserInfo: () => ce("GET", "/users/me"),
+  listAPIKeys: () => ce("GET", "/api-keys?page=1&page_size=100"),
+  revealAPIKey: (n) => ce("GET", `/api-keys/${n}/reveal`),
+  listGroups: () => ce("GET", "/groups?page=1&page_size=100")
 };
-async function Ee(o, l, p, s) {
-  var w, C, B, W;
-  const m = await fetch("/v1/chat/completions", {
+async function st(n, a, o, s) {
+  var M, _, I;
+  const p = {
+    ...a,
+    stream_options: {
+      include_usage: !0,
+      ...a.stream_options
+    }
+  }, l = await fetch("/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
-      Authorization: `Bearer ${o}`
+      Authorization: `Bearer ${n}`
     },
-    body: JSON.stringify(l),
+    body: JSON.stringify(p),
     signal: s
   });
-  if (!m.ok || !m.body) {
-    const I = await m.text();
-    let z = `HTTP ${m.status}`;
+  if (!l.ok || !l.body) {
+    const k = await l.text();
+    let R = `HTTP ${l.status}`;
     try {
-      const L = JSON.parse(I);
-      z = ((w = L.error) == null ? void 0 : w.message) || L.error || L.message || z;
+      const h = JSON.parse(k);
+      R = ((M = h.error) == null ? void 0 : M.message) || h.error || h.message || R;
     } catch {
     }
-    p.onError(z);
+    o.onError(R);
     return;
   }
-  const y = m.body.getReader(), k = new TextDecoder();
-  let v = "", f = { input_tokens: 0, output_tokens: 0, model: l.model, cost: 0 };
+  const m = l.body.getReader(), C = new TextDecoder();
+  let v = "", b = { input_tokens: 0, output_tokens: 0, model: a.model, cost: 0 };
   try {
     for (; ; ) {
-      const { done: I, value: z } = await y.read();
-      if (I) break;
-      v += k.decode(z, { stream: !0 });
-      const L = v.split(`
+      const { done: k, value: R } = await m.read();
+      if (k) break;
+      v += C.decode(R, { stream: !0 });
+      const h = v.split(`
 `);
-      v = L.pop() || "";
-      for (const J of L) {
-        const b = J.trim();
-        if (!b.startsWith("data: ")) continue;
-        const E = b.slice(6);
-        if (E === "[DONE]") {
-          p.onDone(f);
+      v = h.pop() || "";
+      for (const P of h) {
+        const $ = P.trim();
+        if (!$.startsWith("data: ")) continue;
+        const z = $.slice(6);
+        if (z === "[DONE]") {
+          o.onDone(b);
           return;
         }
         try {
-          const u = JSON.parse(E);
-          if (u.error) {
-            p.onError(u.error.message || u.error);
+          const S = JSON.parse(z);
+          if (S.error) {
+            o.onError(S.error.message || S.error);
             return;
           }
-          const H = (W = (B = (C = u.choices) == null ? void 0 : C[0]) == null ? void 0 : B.delta) == null ? void 0 : W.content;
-          H && p.onData(H), u.usage && (f = {
-            input_tokens: u.usage.prompt_tokens || u.usage.input_tokens || 0,
-            output_tokens: u.usage.completion_tokens || u.usage.output_tokens || 0,
-            model: u.model || f.model,
-            cost: u.usage.cost || 0
+          const L = (I = (_ = S.choices) == null ? void 0 : _[0]) == null ? void 0 : I.delta, B = L == null ? void 0 : L.reasoning_content;
+          B && o.onReasoning(B);
+          const F = L == null ? void 0 : L.content;
+          F && o.onData(F), S.usage && (b = {
+            input_tokens: S.usage.prompt_tokens || S.usage.input_tokens || 0,
+            output_tokens: S.usage.completion_tokens || S.usage.output_tokens || 0,
+            model: S.model || b.model,
+            cost: S.usage.cost || 0
           });
         } catch {
         }
       }
     }
-    p.onDone(f);
-  } catch (I) {
+    o.onDone(b);
+  } catch (k) {
     if (s != null && s.aborted) return;
-    p.onError(I instanceof Error ? I.message : "stream failed");
+    o.onError(k instanceof Error ? k.message : "stream failed");
   }
 }
-const de = 960;
-function We() {
-  const { t: o } = Ce(), [l, p] = h([]), [s, m] = h(null), [y, k] = h([]), [v, f] = h(""), [w, C] = h(!1), [B, W] = h(""), [I, z] = h([]), [L, J] = h([]), [b, E] = h(""), [u, H] = h(""), [c, fe] = h(null), [D, me] = h([]), [q, ye] = h([]), [x, re] = h(null), [Y, P] = h(""), [ne, $] = h(""), [G, j] = h(!0), [d, be] = h(() => typeof window < "u" ? window.innerWidth <= de : !1), oe = ee(null), ie = ee(null), xe = ee(null);
-  R(() => {
-    S.listConversations().then(p).catch(() => {
-    }), S.listPlatforms().then((e) => {
-      z(e), e.length > 0 && E(e[0].Name);
+const Ce = 960, G = -1, pe = /!\[[^\]]*\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+)\)/g, lt = /(^|[-_])(?:gpt-?5|o[134]|codex)(?:[-_.]|$)/i, dt = 10 * 1024 * 1024;
+function ct(n) {
+  return n.replace(pe, "[Image generated]").trim() || "[Image generated]";
+}
+function pt(n) {
+  return n.replace(/[\]\\]/g, "");
+}
+function ut(n) {
+  return new Promise((a, o) => {
+    const s = new FileReader();
+    s.onload = () => a(String(s.result || "")), s.onerror = () => o(s.error || new Error("Failed to read image")), s.readAsDataURL(n);
+  });
+}
+function gt(n, a) {
+  const o = n.trim(), s = a.map((p) => `![${pt(p.name)}](${p.url})`).join(`
+`);
+  return [o, s].filter(Boolean).join(`
+
+`);
+}
+function ht(n) {
+  const a = n.replace(pe, "[Image]").trim() || "[Image]";
+  return a.slice(0, 30) + (a.length > 30 ? "..." : "");
+}
+function mt(n, a) {
+  if (n !== "user") return ct(a);
+  const o = [];
+  let s = 0, p;
+  for (pe.lastIndex = 0; (p = pe.exec(a)) !== null; ) {
+    const m = a.slice(s, p.index).trim();
+    m && o.push({ type: "text", text: m }), o.push({ type: "image_url", image_url: { url: p[1] } }), s = p.index + p[0].length;
+  }
+  const l = a.slice(s).trim();
+  return l && o.push({ type: "text", text: l }), o.length ? o : a;
+}
+function De(n) {
+  var a;
+  return !!(n != null && n.image_only || (a = n == null ? void 0 : n.capabilities) != null && a.includes("image_generation"));
+}
+function Te(n) {
+  var a, o;
+  return !n || De(n) ? !1 : !!((a = n.capabilities) != null && a.includes("reasoning") || (o = n.capabilities) != null && o.includes("thinking") || lt.test(n.id));
+}
+function ft(n) {
+  return /^(https?:|mailto:|#)/i.test(n);
+}
+function yt(n) {
+  return /^(data:image\/(?:png|jpeg|jpg|webp|gif);base64,|https?:)/i.test(n);
+}
+function Le(n, a, o) {
+  a.split(`
+`).forEach((p, l) => {
+    l > 0 && n.push(/* @__PURE__ */ r("br", {}, `${o}-br-${l}`)), p && n.push(p);
+  });
+}
+function X(n, a) {
+  const o = [], s = /(!\[([^\]]*)\]\(([^)\s]+)\)|\[([^\]]+)\]\(([^)\s]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_)/g;
+  let p = 0, l;
+  for (; (l = s.exec(n)) !== null; ) {
+    l.index > p && Le(o, n.slice(p, l.index), `${a}-text-${p}`);
+    const m = `${a}-${l.index}`, C = l[2], v = l[3], b = l[4], M = l[5], _ = l[6], I = l[7] || l[8], k = l[9] || l[10];
+    v && yt(v) ? o.push(/* @__PURE__ */ r("img", { src: v, alt: C || "Generated image", style: e.generatedImage, loading: "lazy" }, m)) : M && ft(M) ? o.push(
+      /* @__PURE__ */ r("a", { href: M, style: e.markdownLink, target: "_blank", rel: "noreferrer", children: X(b, `${m}-link`) }, m)
+    ) : _ ? o.push(/* @__PURE__ */ r("code", { style: e.markdownInlineCode, children: _ }, m)) : I ? o.push(/* @__PURE__ */ r("strong", { children: X(I, `${m}-bold`) }, m)) : k ? o.push(/* @__PURE__ */ r("em", { children: X(k, `${m}-em`) }, m)) : o.push(l[0]), p = l.index + l[0].length;
+  }
+  return p < n.length && Le(o, n.slice(p), `${a}-text-${p}`), o.length > 0 ? o : n;
+}
+function bt(n, a, o) {
+  const s = X(a, `${o}-inline`);
+  return n === 1 ? /* @__PURE__ */ r("h1", { style: e.markdownH1, children: s }, o) : n === 2 ? /* @__PURE__ */ r("h2", { style: e.markdownH2, children: s }, o) : n === 3 ? /* @__PURE__ */ r("h3", { style: e.markdownH3, children: s }, o) : /* @__PURE__ */ r("h4", { style: e.markdownH4, children: s }, o);
+}
+function ie(n) {
+  const a = n.replace(/\r\n?/g, `
+`).split(`
+`), o = [];
+  let s = [], p = [], l = [], m = [], C = !1, v = 0;
+  const b = (h) => `${h}-${v++}`, M = () => {
+    if (!s.length) return;
+    const h = b("p");
+    o.push(/* @__PURE__ */ r("p", { style: e.markdownParagraph, children: X(s.join(`
+`), h) }, h)), s = [];
+  }, _ = () => {
+    if (!p.length) return;
+    const h = b("quote");
+    o.push(/* @__PURE__ */ r("blockquote", { style: e.markdownBlockquote, children: X(p.join(`
+`), h) }, h)), p = [];
+  }, I = () => {
+    if (!l.length) return;
+    const h = b("list"), P = l.map(($, z) => /* @__PURE__ */ r("li", { style: e.markdownListItem, children: X($.text, `${h}-${z}`) }, `${h}-${z}`));
+    o.push(l[0].ordered ? /* @__PURE__ */ r("ol", { style: e.markdownList, children: P }, h) : /* @__PURE__ */ r("ul", { style: e.markdownList, children: P }, h)), l = [];
+  }, k = () => {
+    M(), _(), I();
+  }, R = () => {
+    const h = b("code");
+    o.push(/* @__PURE__ */ r("pre", { style: e.markdownCodeBlock, children: /* @__PURE__ */ r("code", { children: m.join(`
+`) }) }, h)), m = [];
+  };
+  for (const h of a) {
+    if (h.match(/^```/)) {
+      C ? (R(), C = !1) : (k(), C = !0);
+      continue;
+    }
+    if (C) {
+      m.push(h);
+      continue;
+    }
+    if (!h.trim()) {
+      k();
+      continue;
+    }
+    const $ = h.match(/^(#{1,6})\s+(.+)$/);
+    if ($) {
+      k(), o.push(bt(Math.min($[1].length, 4), $[2].trim(), b("heading")));
+      continue;
+    }
+    if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(h)) {
+      k(), o.push(/* @__PURE__ */ r("hr", { style: e.markdownDivider }, b("hr")));
+      continue;
+    }
+    const z = h.match(/^>\s?(.*)$/);
+    if (z) {
+      M(), I(), p.push(z[1]);
+      continue;
+    }
+    const S = h.match(/^\s*[-*+]\s+(.+)$/), L = h.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (S || L) {
+      M(), _();
+      const B = !!L;
+      l.length && l[0].ordered !== B && I(), l.push({ ordered: B, text: ((L == null ? void 0 : L[1]) || (S == null ? void 0 : S[1]) || "").trim() });
+      continue;
+    }
+    _(), I(), s.push(h);
+  }
+  return C && R(), k(), o.length > 0 ? o : n;
+}
+function xt() {
+  const { t: n } = Qe(), [a, o] = w([]), [s, p] = w(null), [l, m] = w([]), [C, v] = w(null), [b, M] = w(""), [_, I] = w(""), [k, R] = w(!1), [h, P] = w(""), [$, z] = w([]), [S, L] = w([]), [B, F] = w(""), [ge, Ee] = w("medium"), [g, We] = w(null), [oe, Pe] = w([]), [je, Oe] = w([]), [A, ve] = w(null), [Q, Z] = w(""), [ke, E] = w(""), [ae, ee] = w(!0), [f, Ge] = w(() => typeof window < "u" ? window.innerWidth <= Ce : !1), we = J(null), Se = J(null), he = J(null), se = J(null), j = J(null), O = J(null), me = J(null);
+  Y(() => {
+    D.listConversations().then(o).catch(() => {
+    }), D.getUserInfo().then(async (t) => {
+      We(t);
+      const c = sessionStorage.getItem("apikey_session_secret") || "";
+      t.api_key_id && c && (ve(t.api_key_id), Z(c));
     }).catch(() => {
-    }), S.getUserInfo().then(async (e) => {
-      fe(e);
-      const i = sessionStorage.getItem("apikey_session_secret") || "";
-      e.api_key_id && i && (re(e.api_key_id), P(i));
-    }).catch(() => {
-    }), S.listAPIKeys().then((e) => me(e.list.filter((i) => i.status === "active" && i.group_id != null))).catch(() => {
-    }), S.listGroups().then((e) => ye(e.list)).catch(() => {
+    }), D.listAPIKeys().then((t) => Pe(t.list.filter((c) => c.status === "active" && c.group_id != null))).catch(() => {
+    }), D.listGroups().then((t) => Oe(t.list)).catch(() => {
     });
-  }, []), R(() => {
-    b && S.listModels(b).then((e) => {
-      var i;
-      J(e), e.some((g) => g.id === u) || H(((i = e[0]) == null ? void 0 : i.id) || "");
-    }).catch(() => {
-    });
-  }, [b, u]), R(() => {
-    if (!x) return;
-    const e = D.find((g) => g.id === x);
-    if (!(e != null && e.group_id)) return;
-    const i = q.find((g) => g.id === e.group_id);
-    i && b !== i.platform && E(i.platform);
-  }, [x, D, q, b]), R(() => {
-    if (!s) {
-      k([]);
+  }, []), Y(() => {
+    let t = !1;
+    return (async () => {
+      const u = g != null && g.api_key_id && (!A || A === g.api_key_id) && sessionStorage.getItem("apikey_session_secret") || "";
+      let T = Q || u;
+      try {
+        if (!T && A && (T = (await D.revealAPIKey(A)).key || "", t || Z(T)), !T) {
+          t || (L([]), F(""));
+          return;
+        }
+        const y = await D.listModelsByAPIKey(T);
+        if (t) return;
+        L(y), F((W) => {
+          var U;
+          return y.some((ne) => ne.id === W) ? W : ((U = y[0]) == null ? void 0 : U.id) || "";
+        });
+      } catch (y) {
+        if (t) return;
+        L([]), F(""), E(y instanceof Error ? y.message : "Failed to load models");
+      }
+    })(), () => {
+      t = !0;
+    };
+  }, [Q, A, g == null ? void 0 : g.api_key_id]), Y(() => {
+    j.current = s;
+  }, [s]), Y(() => {
+    if (!s || s === G) {
+      m([]);
       return;
     }
-    S.listMessages(s).then(k).catch(() => {
+    if (me.current === s) {
+      me.current = null;
+      return;
+    }
+    D.listMessages(s).then(m).catch(() => {
     });
-  }, [s]), R(() => {
-    var e;
-    (e = oe.current) == null || e.scrollIntoView({ behavior: "smooth" });
-  }, [y, v]), R(() => {
+  }, [s]), Y(() => {
+    var t;
+    (t = we.current) == null || t.scrollIntoView({ behavior: "smooth" });
+  }, [l, b, _]), Y(() => {
     if (typeof window > "u") return;
-    const e = window.matchMedia(`(max-width: ${de}px)`), i = (g) => {
-      be(g ? g.matches : e.matches);
+    const t = window.matchMedia(`(max-width: ${Ce}px)`), c = (u) => {
+      Ge(u ? u.matches : t.matches);
     };
-    return i(), e.addEventListener ? (e.addEventListener("change", i), () => e.removeEventListener("change", i)) : (e.addListener(i), () => e.removeListener(i));
-  }, []), R(() => {
-    j(!d);
-  }, [d]);
-  const O = T(() => {
-    if (c != null && c.api_key_id && c.api_key_platform) {
-      const i = D.find((g) => g.id === c.api_key_id);
-      return (i == null ? void 0 : i.group_id) || 0;
+    return c(), t.addEventListener ? (t.addEventListener("change", c), () => t.removeEventListener("change", c)) : (t.addListener(c), () => t.removeListener(c));
+  }, []), Y(() => {
+    ee(!f);
+  }, [f]);
+  const te = H(() => {
+    const t = A || (g == null ? void 0 : g.api_key_id), c = oe.find((u) => u.id === t);
+    return (c == null ? void 0 : c.group_id) || 0;
+  }, [oe, A, g]), N = (() => {
+    var c;
+    const t = te();
+    return t ? ((c = je.find((u) => u.id === t)) == null ? void 0 : c.platform) || "" : (g == null ? void 0 : g.api_key_platform) || "";
+  })(), Ke = S.find((t) => t.id === B), fe = Te(Ke), Me = H(async () => {
+    if (Q) return Q;
+    if (g != null && g.api_key_id && (!A || A === g.api_key_id)) {
+      const c = sessionStorage.getItem("apikey_session_secret") || "";
+      if (c)
+        return Z(c), c;
     }
-    const e = D.find((i) => i.id === x);
-    return (e == null ? void 0 : e.group_id) || 0;
-  }, [D, x, c]), ae = T(async () => {
-    if (Y) return Y;
-    if (c != null && c.api_key_id) {
-      const i = sessionStorage.getItem("apikey_session_secret") || "";
-      if (i)
-        return P(i), i;
-    }
-    if (!x)
+    if (!A)
       throw new Error("API key required");
-    const e = await S.revealAPIKey(x);
-    if (!e.key)
+    const t = await D.revealAPIKey(A);
+    if (!t.key)
       throw new Error("Failed to reveal API key");
-    return P(e.key), e.key;
-  }, [Y, x, c]), se = T(async () => {
-    try {
-      const e = await S.createConversation({
-        title: "",
-        group_id: O(),
-        platform: b,
-        model: u
-      });
-      p((i) => [e, ...i]), m(e.id), k([]), d && j(!1);
-    } catch (e) {
-      $(e instanceof Error ? e.message : o("playground.create_failed"));
+    return Z(t.key), t.key;
+  }, [Q, A, g]), _e = H(() => {
+    const t = (/* @__PURE__ */ new Date()).toISOString(), c = {
+      id: G,
+      user_id: (g == null ? void 0 : g.id) || 0,
+      title: "",
+      group_id: te(),
+      platform: N,
+      model: B,
+      created_at: t,
+      updated_at: t
+    };
+    o((u) => [c, ...u.filter((T) => T.id !== G)]), p(G), m([]), z([]), E(""), f && ee(!1);
+  }, [f, te, N, B, g == null ? void 0 : g.id]), Fe = H(async (t) => {
+    var u, T;
+    if (await ((T = (u = window.airgate) == null ? void 0 : u.confirm) == null ? void 0 : T.call(u, n("playground.delete_conversation_confirm"), {
+      title: n("playground.delete_conversation"),
+      danger: !0
+    }))) {
+      if (t === G) {
+        o((y) => y.filter((W) => W.id !== t)), s === t && (p(null), m([]));
+        return;
+      }
+      try {
+        await D.deleteConversation(t), o((y) => y.filter((W) => W.id !== t)), s === t && (p(null), m([]));
+      } catch {
+      }
     }
-  }, [d, O, b, u, o]), ve = T(async (e) => {
-    try {
-      await S.deleteConversation(e), p((i) => i.filter((g) => g.id !== e)), s === e && (m(null), k([]));
-    } catch {
-    }
-  }, [s]), Q = T(async () => {
-    if (!B.trim() || w || !s) return;
-    const e = B.trim(), i = O(), g = [...y, {
+  }, [s, n]), ye = H(async () => {
+    if (!h.trim() && $.length === 0 || k || !s) return;
+    const t = gt(h, $), c = te();
+    let u = s;
+    const T = [...l, {
       id: Date.now(),
       conversation_id: s,
       role: "user",
-      content: e,
-      platform: b,
-      model: u,
-      group_id: i,
+      content: t,
+      platform: N,
+      model: B,
+      group_id: c,
       input_tokens: 0,
       output_tokens: 0,
       cost: 0,
       created_at: (/* @__PURE__ */ new Date()).toISOString()
     }];
-    W(""), $(""), k(g), C(!0), f("");
+    P(""), z([]), he.current && (he.current.style.height = "24px"), se.current && (se.current.value = ""), E(""), m(T), R(!0), v(u), O.current = { conversationId: u, model: B }, M(""), I("");
     try {
-      const A = await ae();
-      await S.persistMessage({
-        conversation_id: s,
+      const y = await Me();
+      if (u === G) {
+        const x = await D.createConversation({
+          title: "",
+          group_id: c,
+          platform: N,
+          model: B
+        });
+        u = x.id, O.current = { conversationId: x.id, model: B }, v(x.id), j.current === G && (j.current = x.id, me.current = x.id, p(x.id), m((re) => re.map((q) => ({ ...q, conversation_id: x.id })))), o((re) => [x, ...re.filter((q) => q.id !== G)]);
+      }
+      await D.persistMessage({
+        conversation_id: u,
         role: "user",
-        content: e,
-        platform: b,
-        model: u,
-        group_id: i
+        content: t,
+        platform: N,
+        model: B,
+        group_id: c
       });
-      const K = new AbortController();
-      ie.current = K;
-      let N = "";
-      await Ee(
-        A,
+      const W = new AbortController();
+      Se.current = W;
+      let U = "", ne = "";
+      await st(
+        y,
         {
-          model: u,
-          messages: g.map((M) => ({ role: M.role, content: M.content })),
-          stream: !0
+          model: B,
+          messages: T.map((x) => ({ role: x.role, content: mt(x.role, x.content) })),
+          stream: !0,
+          ...fe ? { reasoning_effort: ge } : {}
         },
         {
-          onData: (M) => {
-            N += M, f(N);
+          onData: (x) => {
+            U += x, M(U);
           },
-          onDone: async (M) => {
-            if (!N) {
-              $(o("playground.no_response")), f(""), C(!1);
+          onReasoning: (x) => {
+            ne += x, I(ne);
+          },
+          onDone: async (x) => {
+            if (!U) {
+              j.current === u && E(n("playground.no_response")), M(""), I(""), v(null), O.current = null, R(!1);
               return;
             }
-            const _e = await S.persistMessage({
-              conversation_id: s,
+            const re = await D.persistMessage({
+              conversation_id: u,
               role: "assistant",
-              content: N,
-              platform: b,
-              model: M.model || u,
-              group_id: i,
-              input_tokens: M.input_tokens,
-              output_tokens: M.output_tokens,
-              cost: M.cost
+              content: U,
+              reasoning: ne,
+              platform: N,
+              model: x.model || B,
+              group_id: c,
+              input_tokens: x.input_tokens,
+              output_tokens: x.output_tokens,
+              cost: x.cost
             });
-            k((X) => [...X, _e]), p((X) => X.map(
-              (V) => V.id === s && !V.title ? { ...V, title: e.slice(0, 30) + (e.length > 30 ? "..." : ""), updated_at: (/* @__PURE__ */ new Date()).toISOString() } : V
-            )), f(""), C(!1);
+            j.current === u && m((q) => [...q, re]), o((q) => q.map(
+              (de) => de.id === u && !de.title ? { ...de, title: ht(t), updated_at: (/* @__PURE__ */ new Date()).toISOString() } : de
+            )), M(""), I(""), v(null), O.current = null, R(!1);
           },
-          onError: (M) => {
-            $(M), C(!1), f("");
+          onError: (x) => {
+            j.current === u && E(x), R(!1), M(""), I(""), v(null), O.current = null;
           }
         },
-        K.signal
+        W.signal
       );
-    } catch (A) {
-      $(A instanceof Error ? A.message : "stream failed"), C(!1), f("");
+    } catch (y) {
+      j.current === u && E(y instanceof Error ? y.message : "stream failed"), R(!1), M(""), I(""), v(null), O.current = null;
     }
-  }, [s, ae, B, w, y, O, u, b, o]), ke = T(() => {
-    var e;
-    (e = ie.current) == null || e.abort(), v && k((i) => [...i, {
-      id: Date.now() + 1,
-      conversation_id: s,
-      role: "assistant",
-      content: v,
-      platform: "",
-      model: u,
-      group_id: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-      cost: 0,
-      created_at: (/* @__PURE__ */ new Date()).toISOString()
-    }]), f(""), C(!1);
-  }, [v, s, u]), we = T((e) => {
-    e.key === "Enter" && !e.shiftKey && (e.preventDefault(), Q());
-  }, [Q]), Se = T((e) => {
-    e.style.height = "auto", e.style.height = Math.min(e.scrollHeight, 200) + "px";
-  }, []), Me = T((e) => {
-    m(e), d && j(!1);
-  }, [d]), le = l.find((e) => e.id === s);
-  return /* @__PURE__ */ a("div", { "data-full-bleed": !0, style: t.layout, children: [
-    G && d && /* @__PURE__ */ n(
+  }, [s, Me, h, k, l, $, ge, te, B, N, fe, n]), Ne = H(async (t) => {
+    const c = Array.from(t.target.files || []);
+    if (c.length)
+      try {
+        const u = c.filter((y) => y.type.startsWith("image/"));
+        if (u.some((y) => y.size > dt)) {
+          E("Images must be 10MB or smaller");
+          return;
+        }
+        const T = await Promise.all(u.map(async (y) => ({
+          id: `${y.name}-${y.lastModified}-${y.size}`,
+          name: y.name,
+          url: await ut(y)
+        })));
+        z((y) => [...y, ...T]), E("");
+      } catch (u) {
+        E(u instanceof Error ? u.message : "Failed to read image");
+      } finally {
+        t.target.value = "";
+      }
+  }, []), Ve = H((t) => {
+    z((c) => c.filter((u) => u.id !== t));
+  }, []), Ue = H(() => {
+    var c;
+    (c = Se.current) == null || c.abort();
+    const t = O.current;
+    if (b || _) {
+      const u = t == null ? void 0 : t.conversationId;
+      u && j.current === u && m((T) => [...T, {
+        id: Date.now() + 1,
+        conversation_id: u,
+        role: "assistant",
+        content: b,
+        reasoning: _,
+        platform: "",
+        model: t.model,
+        group_id: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cost: 0,
+        created_at: (/* @__PURE__ */ new Date()).toISOString()
+      }]);
+    }
+    M(""), I(""), v(null), O.current = null, R(!1);
+  }, [b, _]), Ie = a.find((t) => t.id === s), V = k && C === s, le = !!(g != null && g.api_key_id || A), Be = !!(h.trim() || $.length > 0) && le && !k, qe = H((t) => {
+    if (t.key === "Enter" && !t.shiftKey) {
+      if (t.preventDefault(), !le) {
+        E("API key required");
+        return;
+      }
+      ye();
+    }
+  }, [le, ye]), Je = H(() => {
+    var t;
+    (t = se.current) == null || t.click();
+  }, []), Ye = H((t) => {
+    t.style.height = "auto", t.style.height = Math.min(t.scrollHeight, 200) + "px";
+  }, []), Xe = H((t) => {
+    p(t), f && ee(!1);
+  }, [f]);
+  return /* @__PURE__ */ d("div", { "data-full-bleed": !0, style: e.layout, children: [
+    ae && f && /* @__PURE__ */ r(
       "div",
       {
-        style: t.sidebarBackdrop,
-        onClick: () => j(!1)
+        style: e.sidebarBackdrop,
+        onClick: () => ee(!1)
       }
     ),
-    G && /* @__PURE__ */ a("div", { style: { ...t.sidebar, ...d ? t.sidebarMobile : null }, children: [
-      /* @__PURE__ */ a("div", { style: t.sidebarHeader, children: [
-        /* @__PURE__ */ n("span", { style: t.sidebarTitle, children: o("playground.conversations") }),
-        /* @__PURE__ */ n(
+    ae && /* @__PURE__ */ d("div", { style: { ...e.sidebar, ...f ? e.sidebarMobile : null }, children: [
+      /* @__PURE__ */ d("div", { style: e.sidebarHeader, children: [
+        /* @__PURE__ */ r("span", { style: e.sidebarTitle, children: n("playground.conversations") }),
+        /* @__PURE__ */ r(
           "button",
           {
-            style: t.newBtn,
-            onClick: se,
-            title: o("playground.new_conversation"),
-            children: /* @__PURE__ */ n("svg", { width: "14", height: "14", viewBox: "0 0 14 14", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", children: /* @__PURE__ */ n("path", { d: "M7 1v12M1 7h12" }) })
+            style: e.newBtn,
+            onClick: _e,
+            title: n("playground.new_conversation"),
+            children: /* @__PURE__ */ r("svg", { width: "14", height: "14", viewBox: "0 0 14 14", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", children: /* @__PURE__ */ r("path", { d: "M7 1v12M1 7h12" }) })
           }
         )
       ] }),
-      /* @__PURE__ */ a("div", { style: t.convList, children: [
-        l.map((e) => {
-          const i = e.id === s;
-          return /* @__PURE__ */ a(
+      /* @__PURE__ */ d("div", { style: e.convList, children: [
+        a.map((t) => {
+          const c = t.id === s;
+          return /* @__PURE__ */ d(
             "div",
             {
               style: {
-                ...t.convItem,
-                background: i ? r("primarySubtle") : "transparent",
-                borderColor: i ? r("borderFocus") : "transparent"
+                ...e.convItem,
+                background: c ? i("primarySubtle") : "transparent",
+                borderColor: c ? i("borderFocus") : "transparent"
               },
-              onClick: () => Me(e.id),
+              onClick: () => Xe(t.id),
               children: [
-                /* @__PURE__ */ n("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: r(i ? "primary" : "textTertiary"), strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round", style: { flexShrink: 0, marginTop: 2 }, children: /* @__PURE__ */ n("path", { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" }) }),
-                /* @__PURE__ */ n("span", { style: {
-                  ...t.convTitle,
-                  color: r(i ? "text" : "textSecondary")
-                }, children: e.title || o("playground.new_conversation") }),
-                /* @__PURE__ */ n(
+                /* @__PURE__ */ r("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: i(c ? "primary" : "textTertiary"), strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round", style: { flexShrink: 0, marginTop: 2 }, children: /* @__PURE__ */ r("path", { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" }) }),
+                /* @__PURE__ */ r("span", { style: {
+                  ...e.convTitle,
+                  color: i(c ? "text" : "textSecondary")
+                }, children: t.title || n("playground.new_conversation") }),
+                /* @__PURE__ */ r(
                   "button",
                   {
-                    style: t.deleteBtn,
-                    onClick: (g) => {
-                      g.stopPropagation(), ve(e.id);
+                    style: e.deleteBtn,
+                    onClick: (u) => {
+                      u.stopPropagation(), Fe(t.id);
                     },
-                    title: o("playground.delete_conversation"),
-                    children: /* @__PURE__ */ n("svg", { width: "12", height: "12", viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", children: /* @__PURE__ */ n("path", { d: "M2 2l8 8M10 2l-8 8" }) })
+                    title: n("playground.delete_conversation"),
+                    children: /* @__PURE__ */ r("svg", { width: "12", height: "12", viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", children: /* @__PURE__ */ r("path", { d: "M2 2l8 8M10 2l-8 8" }) })
                   }
                 )
               ]
             },
-            e.id
+            t.id
           );
         }),
-        l.length === 0 && /* @__PURE__ */ a("div", { style: t.emptyConvList, children: [
-          /* @__PURE__ */ n("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: r("textTertiary"), strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round", style: { opacity: 0.5 }, children: /* @__PURE__ */ n("path", { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" }) }),
-          /* @__PURE__ */ n("span", { children: o("playground.no_conversations") })
+        a.length === 0 && /* @__PURE__ */ d("div", { style: e.emptyConvList, children: [
+          /* @__PURE__ */ r("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: i("textTertiary"), strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round", style: { opacity: 0.5 }, children: /* @__PURE__ */ r("path", { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" }) }),
+          /* @__PURE__ */ r("span", { children: n("playground.no_conversations") })
         ] })
       ] }),
-      c && /* @__PURE__ */ a("div", { style: t.balanceBar, children: [
-        /* @__PURE__ */ n("span", { style: t.balanceLabel, children: o("playground.balance") }),
-        /* @__PURE__ */ a("span", { style: t.balanceValue, children: [
+      g && /* @__PURE__ */ d("div", { style: e.balanceBar, children: [
+        /* @__PURE__ */ r("span", { style: e.balanceLabel, children: n("playground.balance") }),
+        /* @__PURE__ */ d("span", { style: e.balanceValue, children: [
           "$",
-          c.balance.toFixed(4)
+          g.balance.toFixed(4)
         ] })
       ] })
     ] }),
-    /* @__PURE__ */ a("div", { style: t.main, children: [
-      /* @__PURE__ */ a("div", { style: { ...t.topBar, ...d ? t.topBarMobile : null }, children: [
-        /* @__PURE__ */ a("div", { style: { ...t.topBarLeft, ...d ? t.topBarLeftMobile : null }, children: [
-          /* @__PURE__ */ n("button", { style: t.toggleBtn, onClick: () => j(!G), children: /* @__PURE__ */ n("svg", { width: "16", height: "16", viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", children: G ? /* @__PURE__ */ a(Z, { children: [
-            /* @__PURE__ */ n("path", { d: "M6 2v12" }),
-            /* @__PURE__ */ n("path", { d: "M2 2h12v12H2z" }),
-            /* @__PURE__ */ n("path", { d: "M10 6l-2 2 2 2" })
-          ] }) : /* @__PURE__ */ a(Z, { children: [
-            /* @__PURE__ */ n("path", { d: "M6 2v12" }),
-            /* @__PURE__ */ n("path", { d: "M2 2h12v12H2z" }),
-            /* @__PURE__ */ n("path", { d: "M8 6l2 2-2 2" })
+    /* @__PURE__ */ d("div", { style: e.main, children: [
+      /* @__PURE__ */ d("div", { style: { ...e.topBar, ...f ? e.topBarMobile : null }, children: [
+        /* @__PURE__ */ d("div", { style: { ...e.topBarLeft, ...f ? e.topBarLeftMobile : null }, children: [
+          /* @__PURE__ */ r("button", { style: e.toggleBtn, onClick: () => ee(!ae), children: /* @__PURE__ */ r("svg", { width: "16", height: "16", viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", children: ae ? /* @__PURE__ */ d(be, { children: [
+            /* @__PURE__ */ r("path", { d: "M6 2v12" }),
+            /* @__PURE__ */ r("path", { d: "M2 2h12v12H2z" }),
+            /* @__PURE__ */ r("path", { d: "M10 6l-2 2 2 2" })
+          ] }) : /* @__PURE__ */ d(be, { children: [
+            /* @__PURE__ */ r("path", { d: "M6 2v12" }),
+            /* @__PURE__ */ r("path", { d: "M2 2h12v12H2z" }),
+            /* @__PURE__ */ r("path", { d: "M8 6l2 2-2 2" })
           ] }) }) }),
-          /* @__PURE__ */ a("div", { style: { ...t.selectors, ...d ? t.selectorsMobile : null }, children: [
-            !(c != null && c.api_key_id) && /* @__PURE__ */ a(Z, { children: [
-              /* @__PURE__ */ a("div", { style: { ...t.selectorGroup, ...d ? t.selectorGroupMobile : null }, children: [
-                /* @__PURE__ */ n("label", { style: t.selectorLabel, children: "API Key" }),
-                /* @__PURE__ */ a(
+          /* @__PURE__ */ d("div", { style: { ...e.selectors, ...f ? e.selectorsMobile : null }, children: [
+            /* @__PURE__ */ d("div", { style: { ...e.selectorGroup, ...f ? e.selectorGroupMobile : null }, children: [
+              /* @__PURE__ */ r("label", { style: e.selectorLabel, children: "API Key" }),
+              /* @__PURE__ */ d(
+                "select",
+                {
+                  style: { ...e.select, ...f ? e.selectMobile : null },
+                  value: A ?? (g == null ? void 0 : g.api_key_id) ?? "",
+                  onChange: (t) => {
+                    const c = Number(t.target.value || 0);
+                    ve(c || null), Z("");
+                  },
+                  children: [
+                    /* @__PURE__ */ r("option", { value: "", children: "Select key" }),
+                    (g == null ? void 0 : g.api_key_id) && !oe.some((t) => t.id === g.api_key_id) && /* @__PURE__ */ r("option", { value: g.api_key_id, children: g.api_key_name || "Current key" }),
+                    oe.map((t) => /* @__PURE__ */ r("option", { value: t.id, children: t.name }, t.id))
+                  ]
+                }
+              )
+            ] }),
+            !f && /* @__PURE__ */ r("div", { style: e.selectorDivider }),
+            /* @__PURE__ */ d("div", { style: { ...e.selectorGroup, ...f ? e.selectorGroupMobile : null }, children: [
+              /* @__PURE__ */ r("label", { style: e.selectorLabel, children: n("playground.model") }),
+              /* @__PURE__ */ r(
+                "select",
+                {
+                  style: { ...e.select, ...f ? e.selectMobile : null },
+                  value: B,
+                  onChange: (t) => F(t.target.value),
+                  children: S.map((t) => /* @__PURE__ */ d("option", { value: t.id, children: [
+                    t.name || t.id,
+                    De(t) ? " · image" : Te(t) ? " · reasoning" : ""
+                  ] }, t.id))
+                }
+              )
+            ] }),
+            fe && /* @__PURE__ */ d(be, { children: [
+              !f && /* @__PURE__ */ r("div", { style: e.selectorDivider }),
+              /* @__PURE__ */ d("div", { style: { ...e.selectorGroup, ...f ? e.selectorGroupMobile : null }, children: [
+                /* @__PURE__ */ r("label", { style: e.selectorLabel, children: "Effort" }),
+                /* @__PURE__ */ d(
                   "select",
                   {
-                    style: { ...t.select, ...d ? t.selectMobile : null },
-                    value: x ?? "",
-                    onChange: (e) => {
-                      const i = Number(e.target.value || 0);
-                      re(i || null), P("");
-                    },
+                    style: { ...e.select, ...f ? e.selectMobile : null },
+                    value: ge,
+                    onChange: (t) => Ee(t.target.value),
                     children: [
-                      /* @__PURE__ */ n("option", { value: "", children: "Select key" }),
-                      D.map((e) => /* @__PURE__ */ n("option", { value: e.id, children: e.name }, e.id))
+                      /* @__PURE__ */ r("option", { value: "minimal", children: "Minimal" }),
+                      /* @__PURE__ */ r("option", { value: "low", children: "Low" }),
+                      /* @__PURE__ */ r("option", { value: "medium", children: "Medium" }),
+                      /* @__PURE__ */ r("option", { value: "high", children: "High" }),
+                      /* @__PURE__ */ r("option", { value: "xhigh", children: "XHigh" })
                     ]
                   }
                 )
-              ] }),
-              !d && /* @__PURE__ */ n("div", { style: t.selectorDivider })
-            ] }),
-            /* @__PURE__ */ a("div", { style: { ...t.selectorGroup, ...d ? t.selectorGroupMobile : null }, children: [
-              /* @__PURE__ */ n("label", { style: t.selectorLabel, children: o("playground.platform") }),
-              /* @__PURE__ */ n(
-                "select",
-                {
-                  style: { ...t.select, ...d ? t.selectMobile : null },
-                  value: b,
-                  onChange: (e) => E(e.target.value),
-                  disabled: !!x || !!(c != null && c.api_key_id),
-                  children: I.filter((e) => {
-                    var i;
-                    return !x || ((i = q.find((g) => {
-                      var A;
-                      return g.id === ((A = D.find((K) => K.id === x)) == null ? void 0 : A.group_id);
-                    })) == null ? void 0 : i.platform) === e.Name;
-                  }).filter((e) => !(c != null && c.api_key_platform) || c.api_key_platform === e.Name).map((e) => /* @__PURE__ */ n("option", { value: e.Name, children: e.DisplayName || e.Name }, e.Name))
-                }
-              )
-            ] }),
-            !d && /* @__PURE__ */ n("div", { style: t.selectorDivider }),
-            /* @__PURE__ */ a("div", { style: { ...t.selectorGroup, ...d ? t.selectorGroupMobile : null }, children: [
-              /* @__PURE__ */ n("label", { style: t.selectorLabel, children: o("playground.model") }),
-              /* @__PURE__ */ n(
-                "select",
-                {
-                  style: { ...t.select, ...d ? t.selectMobile : null },
-                  value: u,
-                  onChange: (e) => H(e.target.value),
-                  children: L.map((e) => /* @__PURE__ */ n("option", { value: e.id, children: e.name || e.id }, e.id))
-                }
-              )
+              ] })
             ] })
           ] })
         ] }),
-        le && /* @__PURE__ */ n("span", { style: { ...t.topBarTitle, ...d ? t.topBarTitleMobile : null }, children: le.title || o("playground.new_conversation") })
+        Ie && /* @__PURE__ */ r("span", { style: { ...e.topBarTitle, ...f ? e.topBarTitleMobile : null }, children: Ie.title || n("playground.new_conversation") })
       ] }),
-      /* @__PURE__ */ a("div", { style: t.messagesArea, children: [
-        !s && /* @__PURE__ */ a("div", { style: { ...t.emptyState, ...d ? t.emptyStateMobile : null }, children: [
-          /* @__PURE__ */ n("div", { style: t.emptyIcon, children: /* @__PURE__ */ a("svg", { width: "48", height: "48", viewBox: "0 0 48 48", fill: "none", children: [
-            /* @__PURE__ */ n("rect", { x: "4", y: "4", width: "40", height: "40", rx: "20", fill: r("primarySubtle") }),
-            /* @__PURE__ */ n("path", { d: "M24 16v6m0 0v6m0-6h6m-6 0h-6", stroke: r("primary"), strokeWidth: "2", strokeLinecap: "round" })
+      /* @__PURE__ */ d("div", { style: e.messagesArea, children: [
+        !s && /* @__PURE__ */ d("div", { style: { ...e.emptyState, ...f ? e.emptyStateMobile : null }, children: [
+          /* @__PURE__ */ r("div", { style: e.emptyIcon, children: /* @__PURE__ */ d("svg", { width: "48", height: "48", viewBox: "0 0 48 48", fill: "none", children: [
+            /* @__PURE__ */ r("rect", { x: "4", y: "4", width: "40", height: "40", rx: "20", fill: i("primarySubtle") }),
+            /* @__PURE__ */ r("path", { d: "M24 16v6m0 0v6m0-6h6m-6 0h-6", stroke: i("primary"), strokeWidth: "2", strokeLinecap: "round" })
           ] }) }),
-          /* @__PURE__ */ n("div", { style: t.emptyTitle, children: o("playground.empty_title") }),
-          /* @__PURE__ */ n("div", { style: t.emptyDesc, children: o("playground.empty_description") }),
-          /* @__PURE__ */ a("button", { style: t.emptyBtn, onClick: se, children: [
-            /* @__PURE__ */ n("svg", { width: "14", height: "14", viewBox: "0 0 14 14", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", children: /* @__PURE__ */ n("path", { d: "M7 1v12M1 7h12" }) }),
-            o("playground.new_conversation")
+          /* @__PURE__ */ r("div", { style: e.emptyTitle, children: n("playground.empty_title") }),
+          /* @__PURE__ */ r("div", { style: e.emptyDesc, children: n("playground.empty_description") }),
+          /* @__PURE__ */ d("button", { style: e.emptyBtn, onClick: _e, children: [
+            /* @__PURE__ */ r("svg", { width: "14", height: "14", viewBox: "0 0 14 14", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", children: /* @__PURE__ */ r("path", { d: "M7 1v12M1 7h12" }) }),
+            n("playground.new_conversation")
           ] })
         ] }),
-        s && y.map((e) => /* @__PURE__ */ a("div", { style: { ...t.messageRow, ...d ? t.messageRowMobile : null }, children: [
-          /* @__PURE__ */ n("div", { style: e.role === "user" ? t.avatarUser : t.avatarAssistant, children: e.role === "user" ? /* @__PURE__ */ a("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
-            /* @__PURE__ */ n("path", { d: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" }),
-            /* @__PURE__ */ n("circle", { cx: "12", cy: "7", r: "4" })
-          ] }) : /* @__PURE__ */ a("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
-            /* @__PURE__ */ n("path", { d: "M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z" }),
-            /* @__PURE__ */ n("path", { d: "M6 12h12l2 8H4l2-8z" })
+        s && l.map((t) => /* @__PURE__ */ d("div", { style: { ...e.messageRow, ...f ? e.messageRowMobile : null }, children: [
+          /* @__PURE__ */ r("div", { style: t.role === "user" ? e.avatarUser : e.avatarAssistant, children: t.role === "user" ? /* @__PURE__ */ d("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
+            /* @__PURE__ */ r("path", { d: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" }),
+            /* @__PURE__ */ r("circle", { cx: "12", cy: "7", r: "4" })
+          ] }) : /* @__PURE__ */ d("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
+            /* @__PURE__ */ r("path", { d: "M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z" }),
+            /* @__PURE__ */ r("path", { d: "M6 12h12l2 8H4l2-8z" })
           ] }) }),
-          /* @__PURE__ */ a("div", { style: t.messageBody, children: [
-            /* @__PURE__ */ n("div", { style: t.messageRole, children: e.role === "user" ? o("playground.you") : o("playground.assistant") }),
-            /* @__PURE__ */ n("div", { style: t.messageContent, children: e.content }),
-            e.role === "assistant" && e.model && /* @__PURE__ */ n("div", { style: t.messageMeta, children: /* @__PURE__ */ n("span", { style: t.metaBadge, children: e.model }) })
+          /* @__PURE__ */ d("div", { style: e.messageBody, children: [
+            /* @__PURE__ */ r("div", { style: e.messageRole, children: t.role === "user" ? n("playground.you") : n("playground.assistant") }),
+            t.role === "assistant" && t.reasoning && /* @__PURE__ */ d("details", { style: e.reasoningBox, open: !0, children: [
+              /* @__PURE__ */ r("summary", { style: e.reasoningSummary, children: "Thinking" }),
+              /* @__PURE__ */ r("div", { style: e.reasoningContent, children: ie(t.reasoning) })
+            ] }),
+            /* @__PURE__ */ r("div", { style: e.messageContent, children: ie(t.content) }),
+            t.role === "assistant" && t.model && /* @__PURE__ */ r("div", { style: e.messageMeta, children: /* @__PURE__ */ r("span", { style: e.metaBadge, children: t.model }) })
           ] })
-        ] }, e.id)),
-        w && v && /* @__PURE__ */ a("div", { style: { ...t.messageRow, ...d ? t.messageRowMobile : null }, children: [
-          /* @__PURE__ */ n("div", { style: t.avatarAssistant, children: /* @__PURE__ */ a("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
-            /* @__PURE__ */ n("path", { d: "M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z" }),
-            /* @__PURE__ */ n("path", { d: "M6 12h12l2 8H4l2-8z" })
+        ] }, t.id)),
+        V && b && /* @__PURE__ */ d("div", { style: { ...e.messageRow, ...f ? e.messageRowMobile : null }, children: [
+          /* @__PURE__ */ r("div", { style: e.avatarAssistant, children: /* @__PURE__ */ d("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
+            /* @__PURE__ */ r("path", { d: "M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z" }),
+            /* @__PURE__ */ r("path", { d: "M6 12h12l2 8H4l2-8z" })
           ] }) }),
-          /* @__PURE__ */ a("div", { style: t.messageBody, children: [
-            /* @__PURE__ */ n("div", { style: t.messageRole, children: o("playground.assistant") }),
-            /* @__PURE__ */ n("div", { style: t.messageContent, children: v }),
-            /* @__PURE__ */ a("div", { style: t.messageMeta, children: [
-              /* @__PURE__ */ n("span", { style: t.streamingDot }),
-              /* @__PURE__ */ n("span", { children: o("playground.streaming") })
+          /* @__PURE__ */ d("div", { style: e.messageBody, children: [
+            /* @__PURE__ */ r("div", { style: e.messageRole, children: n("playground.assistant") }),
+            _ && /* @__PURE__ */ d("details", { style: e.reasoningBox, open: !0, children: [
+              /* @__PURE__ */ r("summary", { style: e.reasoningSummary, children: "Thinking" }),
+              /* @__PURE__ */ r("div", { style: e.reasoningContent, children: ie(_) })
+            ] }),
+            /* @__PURE__ */ r("div", { style: e.messageContent, children: ie(b) }),
+            /* @__PURE__ */ d("div", { style: e.messageMeta, children: [
+              /* @__PURE__ */ r("span", { style: e.streamingDot }),
+              /* @__PURE__ */ r("span", { children: n("playground.streaming") })
             ] })
           ] })
         ] }),
-        w && !v && /* @__PURE__ */ a("div", { style: { ...t.messageRow, ...d ? t.messageRowMobile : null }, children: [
-          /* @__PURE__ */ n("div", { style: t.avatarAssistant, children: /* @__PURE__ */ a("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
-            /* @__PURE__ */ n("path", { d: "M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z" }),
-            /* @__PURE__ */ n("path", { d: "M6 12h12l2 8H4l2-8z" })
+        V && !b && /* @__PURE__ */ d("div", { style: { ...e.messageRow, ...f ? e.messageRowMobile : null }, children: [
+          /* @__PURE__ */ r("div", { style: e.avatarAssistant, children: /* @__PURE__ */ d("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
+            /* @__PURE__ */ r("path", { d: "M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z" }),
+            /* @__PURE__ */ r("path", { d: "M6 12h12l2 8H4l2-8z" })
           ] }) }),
-          /* @__PURE__ */ a("div", { style: t.messageBody, children: [
-            /* @__PURE__ */ n("div", { style: t.messageRole, children: o("playground.assistant") }),
-            /* @__PURE__ */ n("div", { style: { ...t.messageContent, opacity: 0.5 }, children: /* @__PURE__ */ n("span", { style: t.thinkingDots, children: o("playground.thinking") }) })
+          /* @__PURE__ */ d("div", { style: e.messageBody, children: [
+            /* @__PURE__ */ r("div", { style: e.messageRole, children: n("playground.assistant") }),
+            _ ? /* @__PURE__ */ d("details", { style: e.reasoningBox, open: !0, children: [
+              /* @__PURE__ */ r("summary", { style: e.reasoningSummary, children: "Thinking" }),
+              /* @__PURE__ */ r("div", { style: e.reasoningContent, children: ie(_) })
+            ] }) : /* @__PURE__ */ r("div", { style: { ...e.messageContent, opacity: 0.5 }, children: /* @__PURE__ */ r("span", { style: e.thinkingDots, children: n("playground.thinking") }) })
           ] })
         ] }),
-        ne && /* @__PURE__ */ a("div", { style: { ...t.errorBar, ...d ? t.errorBarMobile : null }, children: [
-          /* @__PURE__ */ a("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
-            /* @__PURE__ */ n("circle", { cx: "12", cy: "12", r: "10" }),
-            /* @__PURE__ */ n("path", { d: "M12 8v4m0 4h.01" })
+        ke && /* @__PURE__ */ d("div", { style: { ...e.errorBar, ...f ? e.errorBarMobile : null }, children: [
+          /* @__PURE__ */ d("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
+            /* @__PURE__ */ r("circle", { cx: "12", cy: "12", r: "10" }),
+            /* @__PURE__ */ r("path", { d: "M12 8v4m0 4h.01" })
           ] }),
-          ne
+          ke
         ] }),
-        /* @__PURE__ */ n("div", { ref: oe })
+        /* @__PURE__ */ r("div", { ref: we })
       ] }),
-      s && /* @__PURE__ */ n("div", { style: { ...t.inputArea, ...d ? t.inputAreaMobile : null }, children: /* @__PURE__ */ a("div", { style: t.inputWrapper, children: [
-        /* @__PURE__ */ n(
-          "textarea",
-          {
-            ref: xe,
-            style: t.textarea,
-            value: B,
-            onChange: (e) => {
-              W(e.target.value), Se(e.target);
-            },
-            onKeyDown: we,
-            placeholder: o("playground.input_placeholder"),
-            rows: 1,
-            disabled: w
-          }
-        ),
-        /* @__PURE__ */ a("div", { style: { ...t.inputActions, ...d ? t.inputActionsMobile : null }, children: [
-          /* @__PURE__ */ n("span", { style: { ...t.inputHint, ...d ? t.inputHintMobile : null }, children: o("playground.input_hint") }),
-          w ? /* @__PURE__ */ a("button", { style: { ...t.stopBtn, ...d ? t.actionBtnMobile : null }, onClick: ke, children: [
-            /* @__PURE__ */ n("svg", { width: "12", height: "12", viewBox: "0 0 12 12", fill: "currentColor", children: /* @__PURE__ */ n("rect", { x: "2", y: "2", width: "8", height: "8", rx: "1" }) }),
-            o("playground.stop")
-          ] }) : /* @__PURE__ */ a(
+      s && /* @__PURE__ */ r("div", { style: { ...e.inputArea, ...f ? e.inputAreaMobile : null }, children: /* @__PURE__ */ d("div", { style: { ...e.inputWrapper, ...V ? e.inputWrapperStreaming : null }, children: [
+        $.length > 0 && /* @__PURE__ */ r("div", { style: e.imagePreviewList, children: $.map((t) => /* @__PURE__ */ d("div", { style: e.imagePreviewItem, children: [
+          /* @__PURE__ */ r("img", { src: t.url, alt: t.name, style: e.imagePreview }),
+          /* @__PURE__ */ r(
             "button",
             {
-              style: {
-                ...t.sendBtn,
-                ...d ? t.actionBtnMobile : null,
-                opacity: B.trim() && (c != null && c.api_key_id || x) ? 1 : 0.4
-              },
-              onClick: Q,
-              disabled: !B.trim() || !(c != null && c.api_key_id) && !x,
-              children: [
-                /* @__PURE__ */ a("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
-                  /* @__PURE__ */ n("path", { d: "M22 2L11 13" }),
-                  /* @__PURE__ */ n("path", { d: "M22 2l-7 20-4-9-9-4 20-7z" })
-                ] }),
-                o("playground.send")
-              ]
+              type: "button",
+              style: e.removeImageBtn,
+              onClick: () => Ve(t.id),
+              "aria-label": `Remove ${t.name}`,
+              children: "×"
             }
           )
+        ] }, t.id)) }),
+        /* @__PURE__ */ r(
+          "textarea",
+          {
+            ref: he,
+            style: e.textarea,
+            value: h,
+            onChange: (t) => {
+              P(t.target.value), Ye(t.target);
+            },
+            onKeyDown: qe,
+            placeholder: n("playground.input_placeholder"),
+            rows: 1,
+            disabled: V
+          }
+        ),
+        /* @__PURE__ */ r(
+          "input",
+          {
+            ref: se,
+            type: "file",
+            accept: "image/*",
+            multiple: !0,
+            style: e.fileInput,
+            onChange: Ne,
+            disabled: V
+          }
+        ),
+        /* @__PURE__ */ d("div", { style: { ...e.inputActions, ...f ? e.inputActionsMobile : null }, children: [
+          /* @__PURE__ */ r("span", { style: { ...e.inputHint, ...f ? e.inputHintMobile : null }, children: n("playground.input_hint") }),
+          /* @__PURE__ */ d("div", { style: { ...e.inputButtonGroup, ...f ? e.inputButtonGroupMobile : null }, children: [
+            /* @__PURE__ */ d(
+              "button",
+              {
+                type: "button",
+                style: { ...e.attachBtn, ...f ? e.actionBtnMobile : null },
+                onClick: Je,
+                disabled: V,
+                title: "Attach images",
+                children: [
+                  /* @__PURE__ */ d("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
+                    /* @__PURE__ */ r("rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }),
+                    /* @__PURE__ */ r("circle", { cx: "8.5", cy: "8.5", r: "1.5" }),
+                    /* @__PURE__ */ r("path", { d: "M21 15l-5-5L5 21" })
+                  ] }),
+                  "Image"
+                ]
+              }
+            ),
+            V ? /* @__PURE__ */ d("button", { style: { ...e.stopBtn, ...f ? e.actionBtnMobile : null }, onClick: Ue, children: [
+              /* @__PURE__ */ r("svg", { width: "12", height: "12", viewBox: "0 0 12 12", fill: "currentColor", children: /* @__PURE__ */ r("rect", { x: "2", y: "2", width: "8", height: "8", rx: "1" }) }),
+              n("playground.stop")
+            ] }) : /* @__PURE__ */ d(
+              "button",
+              {
+                style: {
+                  ...e.sendBtn,
+                  ...f ? e.actionBtnMobile : null,
+                  opacity: Be ? 1 : 0.4
+                },
+                onClick: ye,
+                disabled: !Be,
+                title: le ? void 0 : "Select an API key first",
+                children: [
+                  /* @__PURE__ */ d("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
+                    /* @__PURE__ */ r("path", { d: "M22 2L11 13" }),
+                    /* @__PURE__ */ r("path", { d: "M22 2l-7 20-4-9-9-4 20-7z" })
+                  ] }),
+                  n("playground.send")
+                ]
+              }
+            )
+          ] })
         ] })
       ] }) })
     ] }),
-    /* @__PURE__ */ n("style", { children: He })
+    /* @__PURE__ */ r("style", { children: vt })
   ] });
 }
-const He = `
+const vt = `
 @keyframes pg-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
@@ -623,13 +928,17 @@ const He = `
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
-`, t = {
+`, e = {
   layout: {
     display: "flex",
     height: "100%",
-    background: r("bgDeep"),
-    fontFamily: r("fontSans"),
-    color: r("text"),
+    minHeight: 0,
+    minWidth: 0,
+    position: "relative",
+    isolation: "isolate",
+    background: i("bgDeep"),
+    fontFamily: i("fontSans"),
+    color: i("text"),
     overflow: "hidden"
   },
   // ── Sidebar ──
@@ -638,16 +947,17 @@ const He = `
     minWidth: 280,
     display: "flex",
     flexDirection: "column",
-    background: r("bg"),
-    borderRight: `1px solid ${r("borderSubtle")}`,
+    minHeight: 0,
+    background: i("bg"),
+    borderRight: `1px solid ${i("borderSubtle")}`,
     position: "relative",
-    zIndex: 2
+    zIndex: 3
   },
   sidebarBackdrop: {
     position: "absolute",
     inset: 0,
     background: "rgba(6, 10, 18, 0.64)",
-    zIndex: 1
+    zIndex: 2
   },
   sidebarMobile: {
     position: "absolute",
@@ -669,7 +979,7 @@ const He = `
     fontWeight: 600,
     textTransform: "uppercase",
     letterSpacing: "0.08em",
-    color: r("textTertiary")
+    color: i("textTertiary")
   },
   newBtn: {
     display: "flex",
@@ -677,12 +987,12 @@ const He = `
     justifyContent: "center",
     width: 28,
     height: 28,
-    border: `1px solid ${r("border")}`,
-    borderRadius: r("radiusSm"),
-    background: r("bgSurface"),
-    color: r("textSecondary"),
+    border: `1px solid ${i("border")}`,
+    borderRadius: i("radiusSm"),
+    background: i("bgSurface"),
+    color: i("textSecondary"),
     cursor: "pointer",
-    transition: r("transition")
+    transition: i("transition")
   },
   convList: {
     flex: 1,
@@ -694,9 +1004,9 @@ const He = `
     alignItems: "flex-start",
     gap: 8,
     padding: "10px 10px",
-    borderRadius: r("radiusSm"),
+    borderRadius: i("radiusSm"),
     cursor: "pointer",
-    transition: r("transition"),
+    transition: i("transition"),
     border: "1px solid transparent",
     marginBottom: 2
   },
@@ -711,13 +1021,13 @@ const He = `
   deleteBtn: {
     background: "none",
     border: "none",
-    color: r("textTertiary"),
+    color: i("textTertiary"),
     cursor: "pointer",
     padding: "2px",
     lineHeight: 1,
     flexShrink: 0,
     opacity: 0.5,
-    transition: r("transition"),
+    transition: i("transition"),
     marginTop: 1
   },
   emptyConvList: {
@@ -726,7 +1036,7 @@ const He = `
     alignItems: "center",
     gap: 8,
     padding: "32px 16px",
-    color: r("textTertiary"),
+    color: i("textTertiary"),
     fontSize: 12
   },
   balanceBar: {
@@ -734,27 +1044,29 @@ const He = `
     justifyContent: "space-between",
     alignItems: "center",
     padding: "12px 16px",
-    borderTop: `1px solid ${r("borderSubtle")}`
+    borderTop: `1px solid ${i("borderSubtle")}`
   },
   balanceLabel: {
     fontSize: 11,
     fontWeight: 500,
     textTransform: "uppercase",
     letterSpacing: "0.06em",
-    color: r("textTertiary")
+    color: i("textTertiary")
   },
   balanceValue: {
     fontSize: 13,
     fontWeight: 600,
-    fontFamily: r("fontMono"),
-    color: r("primary")
+    fontFamily: i("fontMono"),
+    color: i("primary")
   },
   // ── Main ──
   main: {
     flex: 1,
     display: "flex",
     flexDirection: "column",
-    minWidth: 0
+    minHeight: 0,
+    minWidth: 0,
+    overflow: "hidden"
   },
   // ── Top bar ──
   topBar: {
@@ -763,8 +1075,8 @@ const He = `
     justifyContent: "space-between",
     gap: 16,
     padding: "8px 20px",
-    borderBottom: `1px solid ${r("borderSubtle")}`,
-    background: r("bg"),
+    borderBottom: `1px solid ${i("borderSubtle")}`,
+    background: i("bg"),
     flexShrink: 0,
     minHeight: 52
   },
@@ -791,20 +1103,20 @@ const He = `
     width: 32,
     height: 32,
     border: "none",
-    borderRadius: r("radiusSm"),
+    borderRadius: i("radiusSm"),
     background: "transparent",
-    color: r("textSecondary"),
+    color: i("textSecondary"),
     cursor: "pointer",
-    transition: r("transition"),
+    transition: i("transition"),
     flexShrink: 0
   },
   selectors: {
     display: "flex",
     alignItems: "center",
     gap: 0,
-    background: r("bgSurface"),
-    borderRadius: r("radiusSm"),
-    border: `1px solid ${r("borderSubtle")}`,
+    background: i("bgSurface"),
+    borderRadius: i("radiusSm"),
+    border: `1px solid ${i("borderSubtle")}`,
     overflow: "hidden"
   },
   selectorsMobile: {
@@ -835,37 +1147,37 @@ const He = `
     fontWeight: 600,
     textTransform: "uppercase",
     letterSpacing: "0.08em",
-    color: r("textTertiary"),
+    color: i("textTertiary"),
     whiteSpace: "nowrap"
   },
   selectorDivider: {
     width: 1,
     height: 24,
-    background: r("borderSubtle"),
+    background: i("borderSubtle"),
     flexShrink: 0
   },
   select: {
     padding: "2px 4px",
     border: "none",
     background: "transparent",
-    color: r("text"),
+    color: i("text"),
     fontSize: 13,
     fontWeight: 500,
     outline: "none",
     cursor: "pointer",
-    fontFamily: r("fontSans"),
+    fontFamily: i("fontSans"),
     minWidth: 0
   },
   selectMobile: {
     width: "100%",
     minHeight: 34,
-    borderRadius: r("radiusSm"),
+    borderRadius: i("radiusSm"),
     padding: "6px 8px",
-    background: r("bgDeep")
+    background: i("bgDeep")
   },
   topBarTitle: {
     fontSize: 12,
-    color: r("textTertiary"),
+    color: i("textTertiary"),
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap"
@@ -876,6 +1188,7 @@ const He = `
   // ── Messages ──
   messagesArea: {
     flex: 1,
+    minHeight: 0,
     overflowY: "auto",
     display: "flex",
     flexDirection: "column"
@@ -900,12 +1213,12 @@ const He = `
   emptyTitle: {
     fontSize: 18,
     fontWeight: 600,
-    color: r("text"),
+    color: i("text"),
     letterSpacing: "-0.02em"
   },
   emptyDesc: {
     fontSize: 13,
-    color: r("textSecondary"),
+    color: i("textSecondary"),
     maxWidth: 300,
     textAlign: "center",
     lineHeight: 1.5
@@ -916,15 +1229,15 @@ const He = `
     gap: 8,
     padding: "10px 22px",
     border: "none",
-    borderRadius: r("radiusMd"),
-    background: r("primary"),
-    color: r("textInverse"),
+    borderRadius: i("radiusMd"),
+    background: i("primary"),
+    color: i("textInverse"),
     fontSize: 14,
     fontWeight: 600,
     cursor: "pointer",
-    transition: r("transition"),
+    transition: i("transition"),
     marginTop: 8,
-    fontFamily: r("fontSans")
+    fontFamily: i("fontSans")
   },
   // ── Message row ──
   messageRow: {
@@ -932,7 +1245,7 @@ const He = `
     gap: 14,
     padding: "20px 28px",
     animation: "pg-fadein 0.25s ease-out",
-    borderBottom: `1px solid ${r("borderSubtle")}`
+    borderBottom: `1px solid ${i("borderSubtle")}`
   },
   messageRowMobile: {
     gap: 10,
@@ -942,8 +1255,8 @@ const He = `
     width: 30,
     height: 30,
     borderRadius: "50%",
-    background: r("primary"),
-    color: r("textInverse"),
+    background: i("primary"),
+    color: i("textInverse"),
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -953,9 +1266,9 @@ const He = `
     width: 30,
     height: 30,
     borderRadius: "50%",
-    background: r("bgSurface"),
-    border: `1px solid ${r("border")}`,
-    color: r("textSecondary"),
+    background: i("bgSurface"),
+    border: `1px solid ${i("border")}`,
+    color: i("textSecondary"),
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -969,14 +1282,125 @@ const He = `
     fontSize: 12,
     fontWeight: 600,
     marginBottom: 4,
-    color: r("text")
+    color: i("text")
   },
   messageContent: {
     fontSize: 14,
-    lineHeight: 1.7,
-    whiteSpace: "pre-wrap",
+    lineHeight: 1.72,
     wordBreak: "break-word",
-    color: r("text")
+    color: "#cfd6e6"
+  },
+  markdownParagraph: {
+    margin: "0 0 11px"
+  },
+  markdownH1: {
+    margin: "2px 0 14px",
+    fontSize: 21,
+    lineHeight: 1.25,
+    color: "#eef4ff",
+    letterSpacing: "-0.02em"
+  },
+  markdownH2: {
+    margin: "18px 0 10px",
+    fontSize: 17,
+    lineHeight: 1.3,
+    color: "#e8eefb",
+    letterSpacing: "-0.01em"
+  },
+  markdownH3: {
+    margin: "16px 0 8px",
+    fontSize: 15,
+    lineHeight: 1.35,
+    color: "#dfe7f6"
+  },
+  markdownH4: {
+    margin: "14px 0 8px",
+    fontSize: 14,
+    lineHeight: 1.4,
+    color: "#d8e0ef"
+  },
+  markdownList: {
+    margin: "0 0 12px",
+    paddingLeft: 20,
+    color: "#cfd6e6"
+  },
+  markdownListItem: {
+    margin: "4px 0"
+  },
+  markdownBlockquote: {
+    margin: "0 0 12px",
+    padding: "9px 13px",
+    borderLeft: "3px solid rgba(62, 207, 180, 0.48)",
+    borderRadius: "0 10px 10px 0",
+    background: "rgba(62, 207, 180, 0.055)",
+    color: "#aeb8ca"
+  },
+  markdownCodeBlock: {
+    margin: "4px 0 14px",
+    padding: "13px 15px",
+    borderRadius: i("radiusSm"),
+    background: "linear-gradient(180deg, rgba(17, 23, 36, 0.92), rgba(10, 14, 24, 0.92))",
+    border: "1px solid rgba(148, 175, 225, 0.075)",
+    color: "#d5deef",
+    fontFamily: i("fontMono"),
+    fontSize: 12.5,
+    lineHeight: 1.72,
+    overflowX: "auto",
+    whiteSpace: "pre",
+    boxShadow: "inset 0 1px 0 rgba(255, 255, 255, 0.025)"
+  },
+  markdownInlineCode: {
+    padding: "1px 5px 2px",
+    borderRadius: 6,
+    background: "rgba(125, 211, 252, 0.08)",
+    border: "1px solid rgba(125, 211, 252, 0.11)",
+    color: "#b8e7ff",
+    fontFamily: i("fontMono"),
+    fontSize: "0.9em"
+  },
+  markdownLink: {
+    color: "#6ee7d1",
+    textDecoration: "underline",
+    textDecorationColor: "rgba(110, 231, 209, 0.28)",
+    textUnderlineOffset: 3
+  },
+  markdownDivider: {
+    height: 1,
+    border: 0,
+    background: "linear-gradient(90deg, transparent, rgba(148, 175, 225, 0.14), transparent)",
+    margin: "16px 0"
+  },
+  reasoningBox: {
+    marginBottom: 10,
+    padding: "10px 12px",
+    borderRadius: i("radiusSm"),
+    background: i("bgSurface"),
+    border: `1px solid ${i("borderSubtle")}`
+  },
+  reasoningSummary: {
+    cursor: "pointer",
+    fontSize: 12,
+    fontWeight: 600,
+    color: i("textSecondary"),
+    userSelect: "none"
+  },
+  reasoningContent: {
+    marginTop: 8,
+    fontSize: 13,
+    lineHeight: 1.6,
+    wordBreak: "break-word",
+    color: "#9ea9bd"
+  },
+  generatedImage: {
+    display: "block",
+    maxWidth: "min(100%, 420px)",
+    maxHeight: 420,
+    width: "auto",
+    height: "auto",
+    marginTop: 10,
+    borderRadius: i("radiusMd"),
+    border: `1px solid ${i("borderSubtle")}`,
+    objectFit: "contain"
   },
   messageMeta: {
     display: "flex",
@@ -984,23 +1408,23 @@ const He = `
     gap: 6,
     marginTop: 8,
     fontSize: 11,
-    color: r("textTertiary")
+    color: i("textTertiary")
   },
   metaBadge: {
     display: "inline-flex",
     padding: "2px 8px",
     borderRadius: "999px",
-    background: r("bgSurface"),
-    border: `1px solid ${r("borderSubtle")}`,
+    background: i("bgSurface"),
+    border: `1px solid ${i("borderSubtle")}`,
     fontSize: 11,
-    fontFamily: r("fontMono"),
-    color: r("textSecondary")
+    fontFamily: i("fontMono"),
+    color: i("textSecondary")
   },
   streamingDot: {
     width: 6,
     height: 6,
     borderRadius: "50%",
-    background: r("primary"),
+    background: i("primary"),
     animation: "pg-pulse 1.2s ease-in-out infinite"
   },
   thinkingDots: {
@@ -1013,11 +1437,11 @@ const He = `
     gap: 8,
     margin: "8px 28px",
     padding: "10px 14px",
-    borderRadius: r("radiusSm"),
-    background: r("dangerSubtle"),
-    color: r("danger"),
+    borderRadius: i("radiusSm"),
+    background: i("dangerSubtle"),
+    color: i("danger"),
     fontSize: 13,
-    border: `1px solid ${r("danger")}`,
+    border: `1px solid ${i("danger")}`,
     borderColor: "rgba(251, 113, 133, 0.2)"
   },
   errorBarMobile: {
@@ -1026,8 +1450,8 @@ const He = `
   // ── Input ──
   inputArea: {
     padding: "16px 28px 20px",
-    borderTop: `1px solid ${r("borderSubtle")}`,
-    background: r("bg"),
+    borderTop: `1px solid ${i("borderSubtle")}`,
+    background: i("bg"),
     flexShrink: 0
   },
   inputAreaMobile: {
@@ -1037,24 +1461,64 @@ const He = `
     display: "flex",
     flexDirection: "column",
     gap: 8,
-    border: `1px solid ${r("border")}`,
-    borderRadius: r("radiusMd"),
-    background: r("bgSurface"),
+    border: `1px solid ${i("border")}`,
+    borderRadius: i("radiusMd"),
+    background: i("bgSurface"),
     padding: "12px 14px 8px",
-    transition: r("transition")
+    transition: i("transition")
+  },
+  inputWrapperStreaming: {
+    paddingTop: 8,
+    paddingBottom: 8
+  },
+  imagePreviewList: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 8
+  },
+  imagePreviewItem: {
+    position: "relative",
+    width: 76,
+    height: 76,
+    borderRadius: i("radiusSm"),
+    overflow: "hidden",
+    border: `1px solid ${i("borderSubtle")}`,
+    background: i("bgHover")
+  },
+  imagePreview: {
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    display: "block"
+  },
+  removeImageBtn: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    width: 20,
+    height: 20,
+    border: "none",
+    borderRadius: 999,
+    background: "rgba(0, 0, 0, 0.62)",
+    color: "#fff",
+    cursor: "pointer",
+    lineHeight: "20px",
+    padding: 0,
+    fontSize: 16
   },
   textarea: {
     width: "100%",
     border: "none",
     background: "transparent",
-    color: r("text"),
+    color: i("text"),
     fontSize: 14,
-    fontFamily: r("fontSans"),
+    fontFamily: i("fontSans"),
     resize: "none",
     outline: "none",
     lineHeight: 1.6,
+    height: 24,
     minHeight: 24,
-    maxHeight: 200
+    maxHeight: 160
   },
   inputActions: {
     display: "flex",
@@ -1066,12 +1530,39 @@ const He = `
     flexDirection: "column",
     alignItems: "stretch"
   },
+  inputButtonGroup: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8
+  },
+  inputButtonGroupMobile: {
+    width: "100%",
+    flexDirection: "column"
+  },
+  fileInput: {
+    display: "none"
+  },
   inputHint: {
     fontSize: 11,
-    color: r("textTertiary")
+    color: i("textTertiary")
   },
   inputHintMobile: {
     order: 2
+  },
+  attachBtn: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "6px 12px",
+    border: `1px solid ${i("border")}`,
+    borderRadius: i("radiusSm"),
+    background: i("bgSurface"),
+    color: i("textSecondary"),
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: i("transition"),
+    fontFamily: i("fontSans")
   },
   sendBtn: {
     display: "inline-flex",
@@ -1079,14 +1570,14 @@ const He = `
     gap: 6,
     padding: "6px 16px",
     border: "none",
-    borderRadius: r("radiusSm"),
-    background: r("primary"),
-    color: r("textInverse"),
+    borderRadius: i("radiusSm"),
+    background: i("primary"),
+    color: i("textInverse"),
     fontSize: 13,
     fontWeight: 600,
     cursor: "pointer",
-    transition: r("transition"),
-    fontFamily: r("fontSans")
+    transition: i("transition"),
+    fontFamily: i("fontSans")
   },
   stopBtn: {
     display: "inline-flex",
@@ -1094,23 +1585,23 @@ const He = `
     gap: 6,
     padding: "6px 16px",
     border: "none",
-    borderRadius: r("radiusSm"),
-    background: r("danger"),
-    color: r("textInverse"),
+    borderRadius: i("radiusSm"),
+    background: i("danger"),
+    color: i("textInverse"),
     fontSize: 13,
     fontWeight: 600,
     cursor: "pointer",
-    fontFamily: r("fontSans")
+    fontFamily: i("fontSans")
   },
   actionBtnMobile: {
     width: "100%",
     justifyContent: "center"
   }
-}, Ge = {
+}, Mt = {
   routes: [
-    { path: "/playground", component: We }
+    { path: "/playground", component: xt }
   ]
 };
 export {
-  Ge as default
+  Mt as default
 };

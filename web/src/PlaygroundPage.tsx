@@ -1,10 +1,309 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cssVar } from '@airgate/theme';
 import { api, chatCompletionsStream } from './api';
-import type { APIKeyItem, Conversation, GroupItem, Message, Platform, ModelInfo, UserInfo } from './api';
+import type { APIKeyItem, ChatMessageContent, Conversation, GroupItem, Message, ModelInfo, UserInfo } from './api';
+
+declare global {
+  interface Window {
+    airgate?: {
+      confirm?: (message: string, options?: { title?: string; danger?: boolean }) => Promise<boolean>;
+    };
+  }
+}
 
 const MOBILE_BREAKPOINT = 960;
+const DRAFT_CONVERSATION_ID = -1;
+const IMAGE_MARKDOWN_RE = /!\[[^\]]*\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+)\)/g;
+const IMAGE_MARKDOWN_ITEM_RE = /!\[([^\]]*)\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+)\)/g;
+const REASONING_MODEL_RE = /(^|[-_])(?:gpt-?5|o[134]|codex)(?:[-_.]|$)/i;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+type PendingImage = { id: string; name: string; url: string };
+
+function stripImageMarkdown(content: string) {
+  return content.replace(IMAGE_MARKDOWN_RE, '[Image generated]').trim() || '[Image generated]';
+}
+
+function escapeMarkdownAlt(text: string) {
+  return text.replace(/[\]\\]/g, '');
+}
+
+function fileToDataURL(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read image'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function messageContentWithImages(text: string, images: PendingImage[]) {
+  const body = text.trim();
+  const imageMarkdown = images.map(image => `![${escapeMarkdownAlt(image.name)}](${image.url})`).join('\n');
+  return [body, imageMarkdown].filter(Boolean).join('\n\n');
+}
+
+async function imagesFromFiles(files: File[]) {
+  const images = files.filter(file => file.type.startsWith('image/'));
+  if (images.some(file => file.size > MAX_IMAGE_BYTES)) {
+    throw new Error('Images must be 10MB or smaller');
+  }
+
+  return Promise.all(images.map(async file => ({
+    id: `${file.name}-${file.lastModified}-${file.size}`,
+    name: file.name || 'pasted-image',
+    url: await fileToDataURL(file),
+  })));
+}
+
+function titleFromMessageContent(content: string) {
+  const title = content.replace(IMAGE_MARKDOWN_RE, '[Image]').trim() || '[Image]';
+  return title.slice(0, 30) + (title.length > 30 ? '...' : '');
+}
+
+function toChatMessageContent(role: string, content: string): ChatMessageContent {
+  if (role !== 'user') return stripImageMarkdown(content);
+
+  const parts: Exclude<ChatMessageContent, string> = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  IMAGE_MARKDOWN_RE.lastIndex = 0;
+
+  while ((match = IMAGE_MARKDOWN_RE.exec(content)) !== null) {
+    const text = content.slice(lastIndex, match.index).trim();
+    if (text) parts.push({ type: 'text', text });
+    parts.push({ type: 'image_url', image_url: { url: match[1] } });
+    lastIndex = match.index + match[0].length;
+  }
+
+  const tail = content.slice(lastIndex).trim();
+  if (tail) parts.push({ type: 'text', text: tail });
+
+  return parts.length ? parts : content;
+}
+
+function isImageModel(model?: ModelInfo) {
+  return Boolean(model?.image_only || model?.capabilities?.includes('image_generation'));
+}
+
+function supportsReasoning(model?: ModelInfo) {
+  if (!model || isImageModel(model)) return false;
+  return Boolean(model.capabilities?.includes('reasoning') || model.capabilities?.includes('thinking') || REASONING_MODEL_RE.test(model.id));
+}
+
+function isSafeLinkUrl(url: string) {
+  return /^(https?:|mailto:|#)/i.test(url);
+}
+
+function isSafeImageUrl(url: string) {
+  return /^(data:image\/(?:png|jpeg|jpg|webp|gif);base64,|https?:)/i.test(url);
+}
+
+function pushTextWithBreaks(nodes: ReactNode[], text: string, keyPrefix: string) {
+  const parts = text.split('\n');
+  parts.forEach((part, index) => {
+    if (index > 0) {
+      nodes.push(<br key={`${keyPrefix}-br-${index}`} />);
+    }
+    if (part) {
+      nodes.push(part);
+    }
+  });
+}
+
+function renderInlineMarkdown(text: string, keyPrefix: string) {
+  const nodes: ReactNode[] = [];
+  const inlineRe = /(!\[([^\]]*)\]\(([^)\s]+)\)|\[([^\]]+)\]\(([^)\s]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = inlineRe.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      pushTextWithBreaks(nodes, text.slice(lastIndex, match.index), `${keyPrefix}-text-${lastIndex}`);
+    }
+
+    const key = `${keyPrefix}-${match.index}`;
+    const imageAlt = match[2];
+    const imageUrl = match[3];
+    const linkText = match[4];
+    const linkUrl = match[5];
+    const inlineCode = match[6];
+    const boldText = match[7] || match[8];
+    const italicText = match[9] || match[10];
+
+    if (imageUrl && isSafeImageUrl(imageUrl)) {
+      nodes.push(<img key={key} src={imageUrl} alt={imageAlt || 'Generated image'} style={styles.generatedImage} loading="lazy" />);
+    } else if (linkUrl && isSafeLinkUrl(linkUrl)) {
+      nodes.push(
+        <a key={key} href={linkUrl} style={styles.markdownLink} target="_blank" rel="noreferrer">
+          {renderInlineMarkdown(linkText, `${key}-link`)}
+        </a>,
+      );
+    } else if (inlineCode) {
+      nodes.push(<code key={key} style={styles.markdownInlineCode}>{inlineCode}</code>);
+    } else if (boldText) {
+      nodes.push(<strong key={key}>{renderInlineMarkdown(boldText, `${key}-bold`)}</strong>);
+    } else if (italicText) {
+      nodes.push(<em key={key}>{renderInlineMarkdown(italicText, `${key}-em`)}</em>);
+    } else {
+      nodes.push(match[0]);
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    pushTextWithBreaks(nodes, text.slice(lastIndex), `${keyPrefix}-text-${lastIndex}`);
+  }
+
+  return nodes.length > 0 ? nodes : text;
+}
+
+function renderHeading(level: number, text: string, key: string) {
+  const content = renderInlineMarkdown(text, `${key}-inline`);
+  if (level === 1) return <h1 key={key} style={styles.markdownH1}>{content}</h1>;
+  if (level === 2) return <h2 key={key} style={styles.markdownH2}>{content}</h2>;
+  if (level === 3) return <h3 key={key} style={styles.markdownH3}>{content}</h3>;
+  return <h4 key={key} style={styles.markdownH4}>{content}</h4>;
+}
+
+function renderImageGroup(text: string, key: string) {
+  const images: Array<{ alt: string; url: string }> = [];
+  let match: RegExpExecArray | null;
+  IMAGE_MARKDOWN_ITEM_RE.lastIndex = 0;
+
+  while ((match = IMAGE_MARKDOWN_ITEM_RE.exec(text)) !== null) {
+    images.push({ alt: match[1], url: match[2] });
+  }
+
+  const remainder = text.replace(IMAGE_MARKDOWN_ITEM_RE, '').trim();
+  if (!images.length || remainder) return null;
+
+  return (
+    <div key={key} style={styles.imageGroup}>
+      {images.map((image, index) => (
+        <img
+          key={`${key}-${index}`}
+          src={image.url}
+          alt={image.alt || 'Generated image'}
+          style={styles.generatedImage}
+          loading="lazy"
+        />
+      ))}
+    </div>
+  );
+}
+
+function renderMessageContent(content: string) {
+  const lines = content.replace(/\r\n?/g, '\n').split('\n');
+  const nodes: ReactNode[] = [];
+  let paragraph: string[] = [];
+  let quote: string[] = [];
+  let listItems: Array<{ text: string; ordered: boolean }> = [];
+  let codeLines: string[] = [];
+  let inCodeBlock = false;
+  let nodeIndex = 0;
+
+  const nextKey = (type: string) => `${type}-${nodeIndex++}`;
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    const key = nextKey('p');
+    const text = paragraph.join('\n');
+    nodes.push(renderImageGroup(text, key) || <p key={key} style={styles.markdownParagraph}>{renderInlineMarkdown(text, key)}</p>);
+    paragraph = [];
+  };
+  const flushQuote = () => {
+    if (!quote.length) return;
+    const key = nextKey('quote');
+    nodes.push(<blockquote key={key} style={styles.markdownBlockquote}>{renderInlineMarkdown(quote.join('\n'), key)}</blockquote>);
+    quote = [];
+  };
+  const flushList = () => {
+    if (!listItems.length) return;
+    const key = nextKey('list');
+    const children = listItems.map((item, index) => (
+      <li key={`${key}-${index}`} style={styles.markdownListItem}>{renderInlineMarkdown(item.text, `${key}-${index}`)}</li>
+    ));
+    nodes.push(listItems[0].ordered ? <ol key={key} style={styles.markdownList}>{children}</ol> : <ul key={key} style={styles.markdownList}>{children}</ul>);
+    listItems = [];
+  };
+  const flushBlocks = () => {
+    flushParagraph();
+    flushQuote();
+    flushList();
+  };
+  const flushCodeBlock = () => {
+    const key = nextKey('code');
+    nodes.push(<pre key={key} style={styles.markdownCodeBlock}><code>{codeLines.join('\n')}</code></pre>);
+    codeLines = [];
+  };
+
+  for (const line of lines) {
+    const fenceMatch = line.match(/^```/);
+    if (fenceMatch) {
+      if (inCodeBlock) {
+        flushCodeBlock();
+        inCodeBlock = false;
+      } else {
+        flushBlocks();
+        inCodeBlock = true;
+      }
+      continue;
+    }
+
+    if (inCodeBlock) {
+      codeLines.push(line);
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushBlocks();
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flushBlocks();
+      nodes.push(renderHeading(Math.min(headingMatch[1].length, 4), headingMatch[2].trim(), nextKey('heading')));
+      continue;
+    }
+
+    if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) {
+      flushBlocks();
+      nodes.push(<hr key={nextKey('hr')} style={styles.markdownDivider} />);
+      continue;
+    }
+
+    const quoteMatch = line.match(/^>\s?(.*)$/);
+    if (quoteMatch) {
+      flushParagraph();
+      flushList();
+      quote.push(quoteMatch[1]);
+      continue;
+    }
+
+    const unorderedMatch = line.match(/^\s*[-*+]\s+(.+)$/);
+    const orderedMatch = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (unorderedMatch || orderedMatch) {
+      flushParagraph();
+      flushQuote();
+      const ordered = Boolean(orderedMatch);
+      if (listItems.length && listItems[0].ordered !== ordered) flushList();
+      listItems.push({ ordered, text: (orderedMatch?.[1] || unorderedMatch?.[1] || '').trim() });
+      continue;
+    }
+
+    flushQuote();
+    flushList();
+    paragraph.push(line);
+  }
+
+  if (inCodeBlock) flushCodeBlock();
+  flushBlocks();
+
+  return nodes.length > 0 ? nodes : content;
+}
 
 export default function PlaygroundPage() {
   const { t } = useTranslation();
@@ -12,14 +311,16 @@ export default function PlaygroundPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [streamConversationId, setStreamConversationId] = useState<number | null>(null);
   const [streamContent, setStreamContent] = useState('');
+  const [streamReasoning, setStreamReasoning] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [input, setInput] = useState('');
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
 
-  const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [selectedPlatform, setSelectedPlatform] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('medium');
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [availableKeys, setAvailableKeys] = useState<APIKeyItem[]>([]);
   const [availableGroups, setAvailableGroups] = useState<GroupItem[]>([]);
@@ -34,13 +335,13 @@ export default function PlaygroundPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const activeIdRef = useRef<number | null>(null);
+  const streamContextRef = useRef<{ conversationId: number; model: string } | null>(null);
+  const skipNextMessagesLoadRef = useRef<number | null>(null);
 
   useEffect(() => {
     api.listConversations().then(setConversations).catch(() => {});
-    api.listPlatforms().then(p => {
-      setPlatforms(p);
-      if (p.length > 0) setSelectedPlatform(p[0].Name);
-    }).catch(() => {});
     api.getUserInfo().then(async info => {
       setUserInfo(info);
       const sessionKey = sessionStorage.getItem('apikey_session_secret') || '';
@@ -54,34 +355,63 @@ export default function PlaygroundPage() {
   }, []);
 
   useEffect(() => {
-    if (!selectedPlatform) return;
-    api.listModels(selectedPlatform).then(m => {
-      setModels(m);
-      if (!m.some(item => item.id === selectedModel)) {
-        setSelectedModel(m[0]?.id || '');
+    let cancelled = false;
+
+    const loadModels = async () => {
+      const sessionKey = userInfo?.api_key_id && (!selectedKeyId || selectedKeyId === userInfo.api_key_id)
+        ? sessionStorage.getItem('apikey_session_secret') || ''
+        : '';
+      let apiKey = resolvedAPIKey || sessionKey;
+
+      try {
+        if (!apiKey && selectedKeyId) {
+          const revealed = await api.revealAPIKey(selectedKeyId);
+          apiKey = revealed.key || '';
+          if (!cancelled) setResolvedAPIKey(apiKey);
+        }
+
+        if (!apiKey) {
+          if (!cancelled) {
+            setModels([]);
+            setSelectedModel('');
+          }
+          return;
+        }
+
+        const nextModels = await api.listModelsByAPIKey(apiKey);
+        if (cancelled) return;
+        setModels(nextModels);
+        setSelectedModel(current => (
+          nextModels.some(item => item.id === current) ? current : nextModels[0]?.id || ''
+        ));
+      } catch (e) {
+        if (cancelled) return;
+        setModels([]);
+        setSelectedModel('');
+        setError(e instanceof Error ? e.message : 'Failed to load models');
       }
-    }).catch(() => {});
-  }, [selectedPlatform, selectedModel]);
+    };
+
+    loadModels();
+    return () => { cancelled = true; };
+  }, [resolvedAPIKey, selectedKeyId, userInfo?.api_key_id]);
 
   useEffect(() => {
-    if (!selectedKeyId) return;
-    const selectedKey = availableKeys.find(item => item.id === selectedKeyId);
-    if (!selectedKey?.group_id) return;
-    const selectedGroup = availableGroups.find(item => item.id === selectedKey.group_id);
-    if (!selectedGroup) return;
-    if (selectedPlatform !== selectedGroup.platform) {
-      setSelectedPlatform(selectedGroup.platform);
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  useEffect(() => {
+    if (!activeId || activeId === DRAFT_CONVERSATION_ID) { setMessages([]); return; }
+    if (skipNextMessagesLoadRef.current === activeId) {
+      skipNextMessagesLoadRef.current = null;
+      return;
     }
-  }, [selectedKeyId, availableKeys, availableGroups, selectedPlatform]);
-
-  useEffect(() => {
-    if (!activeId) { setMessages([]); return; }
     api.listMessages(activeId).then(setMessages).catch(() => {});
   }, [activeId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamContent]);
+  }, [messages, streamContent, streamReasoning]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -107,17 +437,25 @@ export default function PlaygroundPage() {
   }, [isMobile]);
 
   const resolveGroupID = useCallback(() => {
-    if (userInfo?.api_key_id && userInfo.api_key_platform) {
-      const sessionKey = availableKeys.find(item => item.id === userInfo.api_key_id);
-      return sessionKey?.group_id || 0;
-    }
-    const selectedKey = availableKeys.find(item => item.id === selectedKeyId);
+    const keyID = selectedKeyId || userInfo?.api_key_id;
+    const selectedKey = availableKeys.find(item => item.id === keyID);
     return selectedKey?.group_id || 0;
   }, [availableKeys, selectedKeyId, userInfo]);
 
+  const selectedGroupPlatform = (() => {
+    const groupID = resolveGroupID();
+    if (groupID) {
+      return availableGroups.find(item => item.id === groupID)?.platform || '';
+    }
+    return userInfo?.api_key_platform || '';
+  })();
+
+  const selectedModelInfo = models.find(item => item.id === selectedModel);
+  const selectedModelSupportsReasoning = supportsReasoning(selectedModelInfo);
+
   const ensureAPIKey = useCallback(async () => {
     if (resolvedAPIKey) return resolvedAPIKey;
-    if (userInfo?.api_key_id) {
+    if (userInfo?.api_key_id && (!selectedKeyId || selectedKeyId === userInfo.api_key_id)) {
       const sessionKey = sessionStorage.getItem('apikey_session_secret') || '';
       if (sessionKey) {
         setResolvedAPIKey(sessionKey);
@@ -135,26 +473,44 @@ export default function PlaygroundPage() {
     return revealed.key;
   }, [resolvedAPIKey, selectedKeyId, userInfo]);
 
-  const createConversation = useCallback(async () => {
-    try {
-      const conv = await api.createConversation({
-        title: '',
-        group_id: resolveGroupID(),
-        platform: selectedPlatform,
-        model: selectedModel,
-      });
-      setConversations(prev => [conv, ...prev]);
-      setActiveId(conv.id);
-      setMessages([]);
-      if (isMobile) {
-        setSidebarOpen(false);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : t('playground.create_failed'));
+  const createConversation = useCallback(() => {
+    const now = new Date().toISOString();
+    const draft: Conversation = {
+      id: DRAFT_CONVERSATION_ID,
+      user_id: userInfo?.id || 0,
+      title: '',
+      group_id: resolveGroupID(),
+      platform: selectedGroupPlatform,
+      model: selectedModel,
+      created_at: now,
+      updated_at: now,
+    };
+    setConversations(prev => [draft, ...prev.filter(c => c.id !== DRAFT_CONVERSATION_ID)]);
+    setActiveId(DRAFT_CONVERSATION_ID);
+    setMessages([]);
+    setPendingImages([]);
+    setError('');
+    if (isMobile) {
+      setSidebarOpen(false);
     }
-  }, [isMobile, resolveGroupID, selectedPlatform, selectedModel, t]);
+  }, [isMobile, resolveGroupID, selectedGroupPlatform, selectedModel, userInfo?.id]);
 
   const deleteConversation = useCallback(async (id: number) => {
+    const confirmed = await window.airgate?.confirm?.(t('playground.delete_conversation_confirm'), {
+      title: t('playground.delete_conversation'),
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    if (id === DRAFT_CONVERSATION_ID) {
+      setConversations(prev => prev.filter(c => c.id !== id));
+      if (activeId === id) {
+        setActiveId(null);
+        setMessages([]);
+      }
+      return;
+    }
+
     try {
       await api.deleteConversation(id);
       setConversations(prev => prev.filter(c => c.id !== id));
@@ -163,19 +519,20 @@ export default function PlaygroundPage() {
         setMessages([]);
       }
     } catch { /* ignore */ }
-  }, [activeId]);
+  }, [activeId, t]);
 
   const sendMessage = useCallback(async () => {
-    if (!input.trim() || isStreaming || !activeId) return;
+    if ((!input.trim() && pendingImages.length === 0) || isStreaming || !activeId) return;
 
-    const content = input.trim();
+    const content = messageContentWithImages(input, pendingImages);
     const groupID = resolveGroupID();
+    let conversationID = activeId;
     const requestMessages = [...messages, {
       id: Date.now(),
       conversation_id: activeId,
       role: 'user',
       content,
-      platform: selectedPlatform,
+      platform: selectedGroupPlatform,
       model: selectedModel,
       group_id: groupID,
       input_tokens: 0,
@@ -185,18 +542,46 @@ export default function PlaygroundPage() {
     }];
 
     setInput('');
+    setPendingImages([]);
+    if (inputRef.current) {
+      inputRef.current.style.height = '24px';
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
     setError('');
     setMessages(requestMessages);
     setIsStreaming(true);
+    setStreamConversationId(conversationID);
+    streamContextRef.current = { conversationId: conversationID, model: selectedModel };
     setStreamContent('');
+    setStreamReasoning('');
 
     try {
       const apiKey = await ensureAPIKey();
+      if (conversationID === DRAFT_CONVERSATION_ID) {
+        const conv = await api.createConversation({
+          title: '',
+          group_id: groupID,
+          platform: selectedGroupPlatform,
+          model: selectedModel,
+        });
+        conversationID = conv.id;
+        streamContextRef.current = { conversationId: conv.id, model: selectedModel };
+        setStreamConversationId(conv.id);
+        if (activeIdRef.current === DRAFT_CONVERSATION_ID) {
+          activeIdRef.current = conv.id;
+          skipNextMessagesLoadRef.current = conv.id;
+          setActiveId(conv.id);
+          setMessages(prev => prev.map(msg => ({ ...msg, conversation_id: conv.id })));
+        }
+        setConversations(prev => [conv, ...prev.filter(c => c.id !== DRAFT_CONVERSATION_ID)]);
+      }
       await api.persistMessage({
-        conversation_id: activeId,
+        conversation_id: conversationID,
         role: 'user',
         content,
-        platform: selectedPlatform,
+        platform: selectedGroupPlatform,
         model: selectedModel,
         group_id: groupID,
       });
@@ -205,80 +590,149 @@ export default function PlaygroundPage() {
       abortRef.current = abort;
 
       let accumulated = '';
+      let accumulatedReasoning = '';
       await chatCompletionsStream(
         apiKey,
         {
           model: selectedModel,
-          messages: requestMessages.map(msg => ({ role: msg.role, content: msg.content })),
+          messages: requestMessages.map(msg => ({ role: msg.role, content: toChatMessageContent(msg.role, msg.content) })),
           stream: true,
+          ...(selectedModelSupportsReasoning ? { reasoning_effort: reasoningEffort } : {}),
         },
         {
           onData: (text) => {
             accumulated += text;
             setStreamContent(accumulated);
           },
+          onReasoning: (text) => {
+            accumulatedReasoning += text;
+            setStreamReasoning(accumulatedReasoning);
+          },
           onDone: async (usage) => {
             if (!accumulated) {
-              setError(t('playground.no_response'));
+              if (activeIdRef.current === conversationID) {
+                setError(t('playground.no_response'));
+              }
               setStreamContent('');
+              setStreamReasoning('');
+              setStreamConversationId(null);
+              streamContextRef.current = null;
               setIsStreaming(false);
               return;
             }
             const persisted = await api.persistMessage({
-              conversation_id: activeId,
+              conversation_id: conversationID,
               role: 'assistant',
               content: accumulated,
-              platform: selectedPlatform,
+              reasoning: accumulatedReasoning,
+              platform: selectedGroupPlatform,
               model: usage.model || selectedModel,
               group_id: groupID,
               input_tokens: usage.input_tokens,
               output_tokens: usage.output_tokens,
               cost: usage.cost,
             });
-            setMessages(prev => [...prev, persisted]);
+            if (activeIdRef.current === conversationID) {
+              setMessages(prev => [...prev, persisted]);
+            }
             setConversations(prev => prev.map(c =>
-              c.id === activeId && !c.title
-                ? { ...c, title: content.slice(0, 30) + (content.length > 30 ? '...' : ''), updated_at: new Date().toISOString() }
+              c.id === conversationID && !c.title
+                ? { ...c, title: titleFromMessageContent(content), updated_at: new Date().toISOString() }
                 : c
             ));
             setStreamContent('');
+            setStreamReasoning('');
+            setStreamConversationId(null);
+            streamContextRef.current = null;
             setIsStreaming(false);
           },
           onError: (err) => {
-            setError(err);
+            if (activeIdRef.current === conversationID) {
+              setError(err);
+            }
             setIsStreaming(false);
             setStreamContent('');
+            setStreamReasoning('');
+            setStreamConversationId(null);
+            streamContextRef.current = null;
           },
         },
         abort.signal,
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'stream failed');
+      if (activeIdRef.current === conversationID) {
+        setError(e instanceof Error ? e.message : 'stream failed');
+      }
       setIsStreaming(false);
       setStreamContent('');
+      setStreamReasoning('');
+      setStreamConversationId(null);
+      streamContextRef.current = null;
     }
-  }, [activeId, ensureAPIKey, input, isStreaming, messages, resolveGroupID, selectedModel, selectedPlatform, t]);
+  }, [activeId, ensureAPIKey, input, isStreaming, messages, pendingImages, reasoningEffort, resolveGroupID, selectedModel, selectedGroupPlatform, selectedModelSupportsReasoning, t]);
+
+  const addImageFiles = useCallback(async (files: File[]) => {
+    if (!files.length) return;
+
+    try {
+      const nextImages = await imagesFromFiles(files);
+      if (!nextImages.length) return;
+      setPendingImages(prev => [...prev, ...nextImages]);
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to read image');
+    }
+  }, []);
+
+  const handleImageChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    await addImageFiles(Array.from(e.target.files || []));
+    e.target.value = '';
+  }, [addImageFiles]);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData.items)
+      .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+      .map(item => item.getAsFile())
+      .filter((file): file is File => Boolean(file));
+
+    if (files.length) {
+      void addImageFiles(files);
+    }
+  }, [addImageFiles]);
+
+  const removePendingImage = useCallback((id: string) => {
+    setPendingImages(prev => prev.filter(image => image.id !== id));
+  }, []);
 
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();
-    if (streamContent) {
-      setMessages(prev => [...prev, {
-        id: Date.now() + 1,
-        conversation_id: activeId!,
-        role: 'assistant',
-        content: streamContent,
-        platform: '', model: selectedModel, group_id: 0,
-        input_tokens: 0, output_tokens: 0, cost: 0,
-        created_at: new Date().toISOString(),
-      }]);
+    const streamContext = streamContextRef.current;
+    if (streamContent || streamReasoning) {
+      const conversationId = streamContext?.conversationId;
+      if (conversationId && activeIdRef.current === conversationId) {
+        setMessages(prev => [...prev, {
+          id: Date.now() + 1,
+          conversation_id: conversationId,
+          role: 'assistant',
+          content: streamContent,
+          reasoning: streamReasoning,
+          platform: '', model: streamContext.model, group_id: 0,
+          input_tokens: 0, output_tokens: 0, cost: 0,
+          created_at: new Date().toISOString(),
+        }]);
+      }
     }
     setStreamContent('');
+    setStreamReasoning('');
+    setStreamConversationId(null);
+    streamContextRef.current = null;
     setIsStreaming(false);
-  }, [streamContent, activeId, selectedModel]);
+  }, [streamContent, streamReasoning]);
 
   const activeConv = conversations.find(c => c.id === activeId);
+  const isActiveConversationStreaming = isStreaming && streamConversationId === activeId;
   const hasSelectedAPIKey = Boolean(userInfo?.api_key_id || selectedKeyId);
-  const canSendMessage = Boolean(input.trim()) && hasSelectedAPIKey && !isStreaming;
+  const canSendMessage = Boolean(input.trim() || pendingImages.length > 0) && hasSelectedAPIKey && !isStreaming;
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -290,6 +744,10 @@ export default function PlaygroundPage() {
       sendMessage();
     }
   }, [hasSelectedAPIKey, sendMessage]);
+
+  const triggerImagePicker = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
 
   const autoResize = useCallback((el: HTMLTextAreaElement) => {
     el.style.height = 'auto';
@@ -396,44 +854,24 @@ export default function PlaygroundPage() {
             </button>
 
             <div style={{ ...styles.selectors, ...(isMobile ? styles.selectorsMobile : null) }}>
-              {!userInfo?.api_key_id && (
-                <>
-                  <div style={{ ...styles.selectorGroup, ...(isMobile ? styles.selectorGroupMobile : null) }}>
-                    <label style={styles.selectorLabel}>API Key</label>
-                    <select
-                      style={{ ...styles.select, ...(isMobile ? styles.selectMobile : null) }}
-                      value={selectedKeyId ?? ''}
-                      onChange={e => {
-                        const nextID = Number(e.target.value || 0);
-                        setSelectedKeyId(nextID || null);
-                        setResolvedAPIKey('');
-                      }}
-                    >
-                      <option value="">Select key</option>
-                      {availableKeys.map(item => (
-                        <option key={item.id} value={item.id}>{item.name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {!isMobile && <div style={styles.selectorDivider} />}
-                </>
-              )}
-
               <div style={{ ...styles.selectorGroup, ...(isMobile ? styles.selectorGroupMobile : null) }}>
-                <label style={styles.selectorLabel}>{t('playground.platform')}</label>
+                <label style={styles.selectorLabel}>API Key</label>
                 <select
                   style={{ ...styles.select, ...(isMobile ? styles.selectMobile : null) }}
-                  value={selectedPlatform}
-                  onChange={e => setSelectedPlatform(e.target.value)}
-                  disabled={!!selectedKeyId || !!userInfo?.api_key_id}
+                  value={selectedKeyId ?? userInfo?.api_key_id ?? ''}
+                  onChange={e => {
+                    const nextID = Number(e.target.value || 0);
+                    setSelectedKeyId(nextID || null);
+                    setResolvedAPIKey('');
+                  }}
                 >
-                  {platforms
-                    .filter(p => !selectedKeyId || availableGroups.find(g => g.id === availableKeys.find(item => item.id === selectedKeyId)?.group_id)?.platform === p.Name)
-                    .filter(p => !userInfo?.api_key_platform || userInfo.api_key_platform === p.Name)
-                    .map(p => (
-                      <option key={p.Name} value={p.Name}>{p.DisplayName || p.Name}</option>
-                    ))}
+                  <option value="">Select key</option>
+                  {userInfo?.api_key_id && !availableKeys.some(item => item.id === userInfo.api_key_id) && (
+                    <option value={userInfo.api_key_id}>{userInfo.api_key_name || 'Current key'}</option>
+                  )}
+                  {availableKeys.map(item => (
+                    <option key={item.id} value={item.id}>{item.name}</option>
+                  ))}
                 </select>
               </div>
 
@@ -447,10 +885,32 @@ export default function PlaygroundPage() {
                   onChange={e => setSelectedModel(e.target.value)}
                 >
                   {models.map(m => (
-                    <option key={m.id} value={m.id}>{m.name || m.id}</option>
+                    <option key={m.id} value={m.id}>
+                      {m.name || m.id}{isImageModel(m) ? ' · image' : supportsReasoning(m) ? ' · reasoning' : ''}
+                    </option>
                   ))}
                 </select>
               </div>
+
+              {selectedModelSupportsReasoning && (
+                <>
+                  {!isMobile && <div style={styles.selectorDivider} />}
+                  <div style={{ ...styles.selectorGroup, ...(isMobile ? styles.selectorGroupMobile : null) }}>
+                    <label style={styles.selectorLabel}>Effort</label>
+                    <select
+                      style={{ ...styles.select, ...(isMobile ? styles.selectMobile : null) }}
+                      value={reasoningEffort}
+                      onChange={e => setReasoningEffort(e.target.value as ReasoningEffort)}
+                    >
+                      <option value="minimal">Minimal</option>
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                      <option value="xhigh">XHigh</option>
+                    </select>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -501,7 +961,13 @@ export default function PlaygroundPage() {
                 <div style={styles.messageRole}>
                   {msg.role === 'user' ? t('playground.you') : t('playground.assistant')}
                 </div>
-                <div style={styles.messageContent}>{msg.content}</div>
+                {msg.role === 'assistant' && msg.reasoning && (
+                  <details style={styles.reasoningBox} open>
+                    <summary style={styles.reasoningSummary}>Thinking</summary>
+                    <div style={styles.reasoningContent}>{renderMessageContent(msg.reasoning)}</div>
+                  </details>
+                )}
+                <div style={styles.messageContent}>{renderMessageContent(msg.content)}</div>
                 {msg.role === 'assistant' && msg.model && (
                   <div style={styles.messageMeta}>
                     <span style={styles.metaBadge}>{msg.model}</span>
@@ -511,7 +977,7 @@ export default function PlaygroundPage() {
             </div>
           ))}
 
-          {isStreaming && streamContent && (
+          {isActiveConversationStreaming && streamContent && (
             <div style={{ ...styles.messageRow, ...(isMobile ? styles.messageRowMobile : null) }}>
               <div style={styles.avatarAssistant}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -521,7 +987,13 @@ export default function PlaygroundPage() {
               </div>
               <div style={styles.messageBody}>
                 <div style={styles.messageRole}>{t('playground.assistant')}</div>
-                <div style={styles.messageContent}>{streamContent}</div>
+                {streamReasoning && (
+                  <details style={styles.reasoningBox} open>
+                    <summary style={styles.reasoningSummary}>Thinking</summary>
+                    <div style={styles.reasoningContent}>{renderMessageContent(streamReasoning)}</div>
+                  </details>
+                )}
+                <div style={styles.messageContent}>{renderMessageContent(streamContent)}</div>
                 <div style={styles.messageMeta}>
                   <span style={styles.streamingDot} />
                   <span>{t('playground.streaming')}</span>
@@ -530,7 +1002,7 @@ export default function PlaygroundPage() {
             </div>
           )}
 
-          {isStreaming && !streamContent && (
+          {isActiveConversationStreaming && !streamContent && (
             <div style={{ ...styles.messageRow, ...(isMobile ? styles.messageRowMobile : null) }}>
               <div style={styles.avatarAssistant}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -540,9 +1012,16 @@ export default function PlaygroundPage() {
               </div>
               <div style={styles.messageBody}>
                 <div style={styles.messageRole}>{t('playground.assistant')}</div>
-                <div style={{ ...styles.messageContent, opacity: 0.5 }}>
-                  <span style={styles.thinkingDots}>{t('playground.thinking')}</span>
-                </div>
+                {streamReasoning ? (
+                  <details style={styles.reasoningBox} open>
+                    <summary style={styles.reasoningSummary}>Thinking</summary>
+                    <div style={styles.reasoningContent}>{renderMessageContent(streamReasoning)}</div>
+                  </details>
+                ) : (
+                  <div style={{ ...styles.messageContent, opacity: 0.5 }}>
+                    <span style={styles.thinkingDots}>{t('playground.thinking')}</span>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -563,7 +1042,24 @@ export default function PlaygroundPage() {
         {/* Input */}
         {activeId && (
           <div style={{ ...styles.inputArea, ...(isMobile ? styles.inputAreaMobile : null) }}>
-            <div style={styles.inputWrapper}>
+            <div style={{ ...styles.inputWrapper, ...(isActiveConversationStreaming ? styles.inputWrapperStreaming : null) }}>
+              {pendingImages.length > 0 && (
+                <div style={styles.imagePreviewList}>
+                  {pendingImages.map(image => (
+                    <div key={image.id} style={styles.imagePreviewItem}>
+                      <img src={image.url} alt={image.name} style={styles.imagePreview} />
+                      <button
+                        type="button"
+                        style={styles.removeImageBtn}
+                        onClick={() => removePendingImage(image.id)}
+                        aria-label={`Remove ${image.name}`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <textarea
                 ref={inputRef}
                 style={styles.textarea}
@@ -572,38 +1068,64 @@ export default function PlaygroundPage() {
                   setInput(e.target.value);
                   autoResize(e.target);
                 }}
+                onPaste={handlePaste}
                 onKeyDown={handleKeyDown}
                 placeholder={t('playground.input_placeholder')}
                 rows={1}
-                disabled={isStreaming}
+                disabled={isActiveConversationStreaming}
+              />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                style={styles.fileInput}
+                onChange={handleImageChange}
+                disabled={isActiveConversationStreaming}
               />
               <div style={{ ...styles.inputActions, ...(isMobile ? styles.inputActionsMobile : null) }}>
                 <span style={{ ...styles.inputHint, ...(isMobile ? styles.inputHintMobile : null) }}>{t('playground.input_hint')}</span>
-                {isStreaming ? (
-                  <button style={{ ...styles.stopBtn, ...(isMobile ? styles.actionBtnMobile : null) }} onClick={stopStreaming}>
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                      <rect x="2" y="2" width="8" height="8" rx="1" />
-                    </svg>
-                    {t('playground.stop')}
-                  </button>
-                ) : (
+                <div style={{ ...styles.inputButtonGroup, ...(isMobile ? styles.inputButtonGroupMobile : null) }}>
                   <button
-                    style={{
-                      ...styles.sendBtn,
-                      ...(isMobile ? styles.actionBtnMobile : null),
-                      opacity: canSendMessage ? 1 : 0.4,
-                    }}
-                    onClick={sendMessage}
-                    disabled={!canSendMessage}
-                    title={hasSelectedAPIKey ? undefined : 'Select an API key first'}
+                    type="button"
+                    style={{ ...styles.attachBtn, ...(isMobile ? styles.actionBtnMobile : null) }}
+                    onClick={triggerImagePicker}
+                    disabled={isActiveConversationStreaming}
+                    title="Attach images"
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M22 2L11 13" />
-                      <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                      <rect x="3" y="3" width="18" height="18" rx="2" />
+                      <circle cx="8.5" cy="8.5" r="1.5" />
+                      <path d="M21 15l-5-5L5 21" />
                     </svg>
-                    {t('playground.send')}
+                    Image
                   </button>
-                )}
+                  {isActiveConversationStreaming ? (
+                    <button style={{ ...styles.stopBtn, ...(isMobile ? styles.actionBtnMobile : null) }} onClick={stopStreaming}>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                        <rect x="2" y="2" width="8" height="8" rx="1" />
+                      </svg>
+                      {t('playground.stop')}
+                    </button>
+                  ) : (
+                    <button
+                      style={{
+                        ...styles.sendBtn,
+                        ...(isMobile ? styles.actionBtnMobile : null),
+                        opacity: canSendMessage ? 1 : 0.4,
+                      }}
+                      onClick={sendMessage}
+                      disabled={!canSendMessage}
+                      title={hasSelectedAPIKey ? undefined : 'Select an API key first'}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M22 2L11 13" />
+                        <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                      </svg>
+                      {t('playground.send')}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -784,8 +1306,8 @@ const styles: Record<string, React.CSSProperties> = {
   topBarMobile: {
     alignItems: 'flex-start',
     flexDirection: 'column',
-    padding: '10px 14px',
-    gap: 10,
+    padding: '8px 12px',
+    gap: 8,
   },
   topBarLeft: {
     display: 'flex',
@@ -795,7 +1317,7 @@ const styles: Record<string, React.CSSProperties> = {
   topBarLeftMobile: {
     width: '100%',
     alignItems: 'flex-start',
-    gap: 10,
+    gap: 8,
   },
   toggleBtn: {
     display: 'flex',
@@ -823,10 +1345,11 @@ const styles: Record<string, React.CSSProperties> = {
   selectorsMobile: {
     flex: 1,
     minWidth: 0,
-    flexWrap: 'wrap',
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
     alignItems: 'stretch',
-    gap: 8,
-    padding: 8,
+    gap: 6,
+    padding: 6,
     overflow: 'visible',
   },
   selectorGroup: {
@@ -837,11 +1360,11 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
   },
   selectorGroupMobile: {
-    width: '100%',
+    minWidth: 0,
     padding: 0,
     flexDirection: 'column',
     alignItems: 'stretch',
-    gap: 4,
+    gap: 3,
   },
   selectorLabel: {
     fontSize: 10,
@@ -871,10 +1394,11 @@ const styles: Record<string, React.CSSProperties> = {
   },
   selectMobile: {
     width: '100%',
-    minHeight: 34,
+    minHeight: 30,
     borderRadius: cssVar('radiusSm'),
-    padding: '6px 8px',
+    padding: '5px 7px',
     background: cssVar('bgDeep'),
+    fontSize: 12,
   },
   topBarTitle: {
     fontSize: 12,
@@ -885,6 +1409,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   topBarTitleMobile: {
     width: '100%',
+    display: 'none',
   },
 
   // ── Messages ──
@@ -990,10 +1515,128 @@ const styles: Record<string, React.CSSProperties> = {
   },
   messageContent: {
     fontSize: 14,
-    lineHeight: 1.7,
-    whiteSpace: 'pre-wrap',
+    lineHeight: 1.72,
     wordBreak: 'break-word',
-    color: cssVar('text'),
+    color: '#cfd6e6',
+  },
+  markdownParagraph: {
+    margin: '0 0 11px',
+  },
+  markdownH1: {
+    margin: '2px 0 14px',
+    fontSize: 21,
+    lineHeight: 1.25,
+    color: '#eef4ff',
+    letterSpacing: '-0.02em',
+  },
+  markdownH2: {
+    margin: '18px 0 10px',
+    fontSize: 17,
+    lineHeight: 1.3,
+    color: '#e8eefb',
+    letterSpacing: '-0.01em',
+  },
+  markdownH3: {
+    margin: '16px 0 8px',
+    fontSize: 15,
+    lineHeight: 1.35,
+    color: '#dfe7f6',
+  },
+  markdownH4: {
+    margin: '14px 0 8px',
+    fontSize: 14,
+    lineHeight: 1.4,
+    color: '#d8e0ef',
+  },
+  markdownList: {
+    margin: '0 0 12px',
+    paddingLeft: 20,
+    color: '#cfd6e6',
+  },
+  markdownListItem: {
+    margin: '4px 0',
+  },
+  markdownBlockquote: {
+    margin: '0 0 12px',
+    padding: '9px 13px',
+    borderLeft: '3px solid rgba(62, 207, 180, 0.48)',
+    borderRadius: '0 10px 10px 0',
+    background: 'rgba(62, 207, 180, 0.055)',
+    color: '#aeb8ca',
+  },
+  markdownCodeBlock: {
+    margin: '4px 0 14px',
+    padding: '13px 15px',
+    borderRadius: cssVar('radiusSm'),
+    background: 'linear-gradient(180deg, rgba(17, 23, 36, 0.92), rgba(10, 14, 24, 0.92))',
+    border: '1px solid rgba(148, 175, 225, 0.075)',
+    color: '#d5deef',
+    fontFamily: cssVar('fontMono'),
+    fontSize: 12.5,
+    lineHeight: 1.72,
+    overflowX: 'auto',
+    whiteSpace: 'pre',
+    boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.025)',
+  },
+  markdownInlineCode: {
+    padding: '1px 5px 2px',
+    borderRadius: 6,
+    background: 'rgba(125, 211, 252, 0.08)',
+    border: '1px solid rgba(125, 211, 252, 0.11)',
+    color: '#b8e7ff',
+    fontFamily: cssVar('fontMono'),
+    fontSize: '0.9em',
+  },
+  markdownLink: {
+    color: '#6ee7d1',
+    textDecoration: 'underline',
+    textDecorationColor: 'rgba(110, 231, 209, 0.28)',
+    textUnderlineOffset: 3,
+  },
+  markdownDivider: {
+    height: 1,
+    border: 0,
+    background: 'linear-gradient(90deg, transparent, rgba(148, 175, 225, 0.14), transparent)',
+    margin: '16px 0',
+  },
+  reasoningBox: {
+    marginBottom: 10,
+    padding: '10px 12px',
+    borderRadius: cssVar('radiusSm'),
+    background: cssVar('bgSurface'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
+  },
+  reasoningSummary: {
+    cursor: 'pointer',
+    fontSize: 12,
+    fontWeight: 600,
+    color: cssVar('textSecondary'),
+    userSelect: 'none',
+  },
+  reasoningContent: {
+    marginTop: 8,
+    fontSize: 13,
+    lineHeight: 1.6,
+    wordBreak: 'break-word',
+    color: '#9ea9bd',
+  },
+  imageGroup: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    gap: 16,
+    margin: '10px 0 12px',
+  },
+  generatedImage: {
+    display: 'block',
+    flex: '1 1 260px',
+    maxWidth: 'min(100%, 420px)',
+    maxHeight: 420,
+    width: '100%',
+    height: 'auto',
+    borderRadius: cssVar('radiusMd'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    objectFit: 'contain',
   },
   messageMeta: {
     display: 'flex',
@@ -1050,7 +1693,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   inputAreaMobile: {
-    padding: '12px 14px 16px',
+    padding: '10px 12px 12px',
   },
   inputWrapper: {
     display: 'flex',
@@ -1059,8 +1702,47 @@ const styles: Record<string, React.CSSProperties> = {
     border: `1px solid ${cssVar('border')}`,
     borderRadius: cssVar('radiusMd'),
     background: cssVar('bgSurface'),
-    padding: '12px 14px 8px',
+    padding: '10px 12px 8px',
     transition: cssVar('transition'),
+  },
+  inputWrapperStreaming: {
+    paddingTop: 8,
+    paddingBottom: 8,
+  },
+  imagePreviewList: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  imagePreviewItem: {
+    position: 'relative',
+    width: 76,
+    height: 76,
+    borderRadius: cssVar('radiusSm'),
+    overflow: 'hidden',
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    background: cssVar('bgHover'),
+  },
+  imagePreview: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    display: 'block',
+  },
+  removeImageBtn: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 20,
+    height: 20,
+    border: 'none',
+    borderRadius: 999,
+    background: 'rgba(0, 0, 0, 0.62)',
+    color: '#fff',
+    cursor: 'pointer',
+    lineHeight: '20px',
+    padding: 0,
+    fontSize: 16,
   },
   textarea: {
     width: '100%',
@@ -1071,9 +1753,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: cssVar('fontSans'),
     resize: 'none',
     outline: 'none',
-    lineHeight: 1.6,
+    lineHeight: 1.55,
+    height: 24,
     minHeight: 24,
-    maxHeight: 200,
+    maxHeight: 128,
   },
   inputActions: {
     display: 'flex',
@@ -1082,15 +1765,43 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 12,
   },
   inputActionsMobile: {
-    flexDirection: 'column',
-    alignItems: 'stretch',
+    alignItems: 'center',
+    gap: 8,
+  },
+  inputButtonGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+  },
+  inputButtonGroupMobile: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'flex-end',
+  },
+  fileInput: {
+    display: 'none',
   },
   inputHint: {
     fontSize: 11,
     color: cssVar('textTertiary'),
   },
   inputHintMobile: {
-    order: 2,
+    display: 'none',
+  },
+  attachBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 12px',
+    border: `1px solid ${cssVar('border')}`,
+    borderRadius: cssVar('radiusSm'),
+    background: cssVar('bgSurface'),
+    color: cssVar('textSecondary'),
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: cssVar('transition'),
+    fontFamily: cssVar('fontSans'),
   },
   sendBtn: {
     display: 'inline-flex',
@@ -1122,7 +1833,8 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: cssVar('fontSans'),
   },
   actionBtnMobile: {
-    width: '100%',
+    flex: 1,
+    minWidth: 0,
     justifyContent: 'center',
   },
 };
