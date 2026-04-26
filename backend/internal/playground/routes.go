@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	sdk "github.com/DouDOU-start/airgate-sdk"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -253,7 +255,7 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		p.logger.Warn("playground chat forward failed", "error", err)
 		if !committed {
-			writeOpenAIError(w, http.StatusServiceUnavailable, "server_error", "upstream_error", "请求暂时无法完成，请稍后重试")
+			writeHostForwardError(w, err)
 			return
 		}
 		_, _ = w.Write([]byte("data: {\"error\":{\"message\":\"请求暂时无法完成，请稍后重试\",\"type\":\"server_error\",\"code\":\"upstream_error\"}}\n\n"))
@@ -301,7 +303,7 @@ func (p *Plugin) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		p.logger.Warn("playground images edits forward failed", "error", err)
-		writeOpenAIError(w, http.StatusServiceUnavailable, "server_error", "upstream_error", "请求暂时无法完成，请稍后重试")
+		writeHostForwardError(w, err)
 		return
 	}
 
@@ -405,6 +407,14 @@ func writeOpenAIError(w http.ResponseWriter, status int, errType, code, message 
 			"code":    code,
 		},
 	})
+}
+
+func writeHostForwardError(w http.ResponseWriter, err error) {
+	if status.Code(err) == codes.ResourceExhausted {
+		writeOpenAIError(w, http.StatusPaymentRequired, "insufficient_quota", "insufficient_quota", "余额不足")
+		return
+	}
+	writeOpenAIError(w, http.StatusServiceUnavailable, "server_error", "upstream_error", "请求暂时无法完成，请稍后重试")
 }
 
 func copyHeaders(dst, src http.Header) {
