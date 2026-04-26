@@ -48,10 +48,6 @@ func (s *Service) CreateConversation(ctx context.Context, userID int, title stri
 		}
 	}
 
-	if groupID <= 0 {
-		groupID = int64(s.opts.DefaultGroupID)
-	}
-
 	conv := &Conversation{UserID: userID, Title: title, GroupID: groupID, Platform: platform, Model: model}
 	err := s.db.QueryRowContext(ctx,
 		`INSERT INTO playground_conversations (user_id, title, group_id, platform, model)
@@ -134,7 +130,7 @@ func (s *Service) ListMessages(ctx context.Context, userID int, convID int64) ([
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, conversation_id, role, content, reasoning, platform, model, group_id, input_tokens, output_tokens, cost, created_at
+		`SELECT id, conversation_id, role, content, reasoning, reasoning_effort, platform, model, group_id, input_tokens, output_tokens, cost, created_at
 		 FROM playground_messages
 		 WHERE conversation_id = $1
 		 ORDER BY created_at`, convID,
@@ -147,7 +143,7 @@ func (s *Service) ListMessages(ctx context.Context, userID int, convID int64) ([
 	var msgs []Message
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.Reasoning, &m.Platform, &m.Model, &m.GroupID, &m.InputTokens, &m.OutputTokens, &m.Cost, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.Reasoning, &m.ReasoningEffort, &m.Platform, &m.Model, &m.GroupID, &m.InputTokens, &m.OutputTokens, &m.Cost, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		msgs = append(msgs, m)
@@ -155,24 +151,25 @@ func (s *Service) ListMessages(ctx context.Context, userID int, convID int64) ([
 	return msgs, rows.Err()
 }
 
-func (s *Service) saveMessage(ctx context.Context, convID int64, role, content, reasoning, platform, model string, groupID int64, inputTokens, outputTokens int, cost float64) (*Message, error) {
+func (s *Service) saveMessage(ctx context.Context, convID int64, role, content, reasoning, reasoningEffort, platform, model string, groupID int64, inputTokens, outputTokens int, cost float64) (*Message, error) {
 	m := &Message{
-		ConversationID: convID,
-		Role:           role,
-		Content:        content,
-		Reasoning:      reasoning,
-		Platform:       platform,
-		Model:          model,
-		GroupID:        groupID,
-		InputTokens:    inputTokens,
-		OutputTokens:   outputTokens,
-		Cost:           cost,
+		ConversationID:  convID,
+		Role:            role,
+		Content:         content,
+		Reasoning:       reasoning,
+		ReasoningEffort: reasoningEffort,
+		Platform:        platform,
+		Model:           model,
+		GroupID:         groupID,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		Cost:            cost,
 	}
 	err := s.db.QueryRowContext(ctx,
-		`INSERT INTO playground_messages (conversation_id, role, content, reasoning, platform, model, group_id, input_tokens, output_tokens, cost)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`INSERT INTO playground_messages (conversation_id, role, content, reasoning, reasoning_effort, platform, model, group_id, input_tokens, output_tokens, cost)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		 RETURNING id, created_at`,
-		convID, role, content, reasoning, platform, model, groupID, inputTokens, outputTokens, cost,
+		convID, role, content, reasoning, reasoningEffort, platform, model, groupID, inputTokens, outputTokens, cost,
 	).Scan(&m.ID, &m.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -185,16 +182,17 @@ func (s *Service) saveMessage(ctx context.Context, convID int64, role, content, 
 }
 
 type PersistMessageRequest struct {
-	ConversationID int64   `json:"conversation_id"`
-	Role           string  `json:"role"`
-	Content        string  `json:"content"`
-	Reasoning      string  `json:"reasoning"`
-	Platform       string  `json:"platform"`
-	Model          string  `json:"model"`
-	GroupID        int64   `json:"group_id"`
-	InputTokens    int     `json:"input_tokens"`
-	OutputTokens   int     `json:"output_tokens"`
-	Cost           float64 `json:"cost"`
+	ConversationID  int64   `json:"conversation_id"`
+	Role            string  `json:"role"`
+	Content         string  `json:"content"`
+	Reasoning       string  `json:"reasoning"`
+	ReasoningEffort string  `json:"reasoning_effort"`
+	Platform        string  `json:"platform"`
+	Model           string  `json:"model"`
+	GroupID         int64   `json:"group_id"`
+	InputTokens     int     `json:"input_tokens"`
+	OutputTokens    int     `json:"output_tokens"`
+	Cost            float64 `json:"cost"`
 }
 
 func (s *Service) PersistMessage(ctx context.Context, userID int, req PersistMessageRequest) (*Message, error) {
@@ -226,7 +224,7 @@ func (s *Service) PersistMessage(ctx context.Context, userID int, req PersistMes
 		model = conv.Model
 	}
 
-	msg, err := s.saveMessage(ctx, conv.ID, req.Role, req.Content, req.Reasoning, platform, model, groupID, req.InputTokens, req.OutputTokens, req.Cost)
+	msg, err := s.saveMessage(ctx, conv.ID, req.Role, req.Content, req.Reasoning, req.ReasoningEffort, platform, model, groupID, req.InputTokens, req.OutputTokens, req.Cost)
 	if err != nil {
 		return nil, fmt.Errorf("save message: %w", err)
 	}

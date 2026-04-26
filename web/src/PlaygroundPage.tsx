@@ -2,7 +2,7 @@ import { Children, cloneElement, isValidElement, useState, useEffect, useRef, us
 import { useTranslation } from 'react-i18next';
 import { cssVar } from '@airgate/theme';
 import { api, chatCompletionsStream } from './api';
-import type { APIKeyItem, ChatMessageContent, Conversation, GroupItem, Message, ModelInfo, UserInfo } from './api';
+import type { ChatMessageContent, Conversation, Message, ModelInfo, PlatformInfo, ReasoningEffort, UserInfo } from './api';
 
 declare global {
   interface Window {
@@ -19,14 +19,38 @@ const IMAGE_MARKDOWN_ITEM_RE = /!\[([^\]]*)\]\((data:image\/(?:png|jpeg|jpg|webp
 const IMAGE_MARKDOWN_TEST_RE = /!\[[^\]]*\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+)\)/;
 const DATA_IMAGE_RE = /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i;
 const REASONING_MODEL_RE = /(^|[-_])(?:gpt-?5|o[134]|codex)(?:[-_.]|$)/i;
+const IMAGE_MODEL_RE = /(^|[-_])(?:gpt[-_]?image|image)(?:[-_.]|\d|$)/i;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-const IMAGE_SIZE_OPTIONS: Array<{ value: ImageSize; label: string }> = [
-  { value: '1024x1024', label: 'Square 1024x1024' },
-  { value: '1024x1536', label: 'Portrait 1024x1536' },
-  { value: '1536x1024', label: 'Landscape 1536x1024' },
+const IMAGE_SIZE_ALIGNMENT = 16;
+const MAX_IMAGE_EDGE = 3840;
+const BASE_RESOLUTION_OPTIONS: Array<{ value: BaseResolution; label: string }> = [
+  { value: 1024, label: '1K' },
+  { value: 2048, label: '2K' },
+  { value: 3840, label: '4K' },
 ];
-type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-type ImageSize = '1024x1024' | '1024x1536' | '1536x1024';
+const IMAGE_RATIO_OPTIONS: Array<{ value: ImageRatio; label: string }> = [
+  { value: '1:1', label: '1:1' },
+  { value: '3:2', label: '3:2' },
+  { value: '2:3', label: '2:3' },
+  { value: '16:9', label: '16:9' },
+  { value: '9:16', label: '9:16' },
+  { value: '4:3', label: '4:3' },
+  { value: '3:4', label: '3:4' },
+  { value: '21:9', label: '21:9' },
+];
+const DEFAULT_IMAGE_SIZE_SETTINGS: ImageSizeSettings = {
+  mode: 'ratio',
+  baseResolution: 1024,
+  ratio: '1:1',
+};
+type ImageSizeMode = 'auto' | 'ratio';
+type BaseResolution = 1024 | 2048 | 3840;
+type ImageRatio = '1:1' | '3:2' | '2:3' | '16:9' | '9:16' | '4:3' | '3:4' | '21:9';
+type ImageSizeSettings = {
+  mode: ImageSizeMode;
+  baseResolution: BaseResolution;
+  ratio: ImageRatio;
+};
 type PendingImage = { id: string; name: string; url: string };
 type PreviewImage = { url: string; alt: string };
 type StreamAssistantOptions = {
@@ -36,16 +60,66 @@ type StreamAssistantOptions = {
   groupID: number;
   platform: string;
   isImageRequest?: boolean;
+  imageSize?: string;
   supportsReasoning?: boolean;
-  apiKey?: string;
+  reasoningEffort?: ReasoningEffort;
   titleContent?: string;
 };
+type RetryRequest = Omit<StreamAssistantOptions, 'titleContent'>;
 type MessageContentOptions = {
   onImagePreview?: (url: string, alt: string) => void;
   imagePreviewTitle?: string;
   generatedImageAlt?: string;
   trailingInlineAction?: ReactNode;
 };
+
+function cloneImageSizeSettings(settings: ImageSizeSettings): ImageSizeSettings {
+  return { ...settings };
+}
+
+function parseRatioValue(value: string) {
+  const [w, h] = value.split(':').map(part => Number.parseInt(part, 10));
+  return w > 0 && h > 0 ? { width: w, height: h } : null;
+}
+
+function alignImageDimension(value: number) {
+  return Math.max(IMAGE_SIZE_ALIGNMENT, Math.floor(value / IMAGE_SIZE_ALIGNMENT) * IMAGE_SIZE_ALIGNMENT);
+}
+
+function clampImageSize(width: number, height: number) {
+  if (width <= MAX_IMAGE_EDGE && height <= MAX_IMAGE_EDGE) return { width, height };
+  if (width >= height) {
+    return { width: MAX_IMAGE_EDGE, height: alignImageDimension(height * MAX_IMAGE_EDGE / width) };
+  }
+  return { width: alignImageDimension(width * MAX_IMAGE_EDGE / height), height: MAX_IMAGE_EDGE };
+}
+
+function formatImageSize(width: number, height: number) {
+  const clamped = clampImageSize(alignImageDimension(width), alignImageDimension(height));
+  return `${clamped.width}x${clamped.height}`;
+}
+
+function resolveImageRatio(settings: ImageSizeSettings) {
+  return parseRatioValue(settings.ratio);
+}
+
+function resolveImageSize(settings: ImageSizeSettings) {
+  if (settings.mode === 'auto') return undefined;
+
+  const ratio = resolveImageRatio(settings);
+  if (!ratio) return undefined;
+  const base = settings.baseResolution;
+  if (ratio.width === ratio.height) return formatImageSize(base, base);
+  if (ratio.width > ratio.height) {
+    return formatImageSize(base, base * ratio.height / ratio.width);
+  }
+  return formatImageSize(base * ratio.width / ratio.height, base);
+}
+
+function imageSizeSummary(settings: ImageSizeSettings) {
+  if (settings.mode === 'auto') return 'Auto';
+  return resolveImageSize(settings) || 'Invalid size';
+}
 
 function stripImageMarkdown(content: string) {
   return content.replace(IMAGE_MARKDOWN_RE, '[Image generated]').trim() || '[Image generated]';
@@ -200,13 +274,29 @@ function toChatMessageContent(role: string, content: string): ChatMessageContent
   return parts.length ? parts : content;
 }
 
+function isImageModelIdentifier(id?: string, name?: string) {
+  return Boolean((id && IMAGE_MODEL_RE.test(id)) || (name && IMAGE_MODEL_RE.test(name)));
+}
+
 function isImageModel(model?: ModelInfo) {
-  return Boolean(model?.image_only || model?.capabilities?.includes('image_generation'));
+  return Boolean(model && (
+    model.image_only ||
+    model.capabilities?.includes('image_generation') ||
+    isImageModelIdentifier(model.id, model.name)
+  ));
 }
 
 function supportsReasoning(model?: ModelInfo) {
   if (!model || isImageModel(model)) return false;
   return Boolean(model.capabilities?.includes('reasoning') || model.capabilities?.includes('thinking') || REASONING_MODEL_RE.test(model.id));
+}
+
+function modelOptionValue(model: ModelInfo) {
+  return `${encodeURIComponent(model.platform || '')}:${encodeURIComponent(model.id)}`;
+}
+
+function platformDisplayName(platforms: PlatformInfo[], name?: string) {
+  return platforms.find(item => item.name === name)?.display_name || name || '';
 }
 
 function isSafeLinkUrl(url: string) {
@@ -490,16 +580,14 @@ export default function PlaygroundPage() {
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
 
+  const [platforms, setPlatforms] = useState<PlatformInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('medium');
-  const [imageSize, setImageSize] = useState<ImageSize>('1024x1024');
+  const [imageSizeSettings, setImageSizeSettings] = useState<ImageSizeSettings>(() => cloneImageSizeSettings(DEFAULT_IMAGE_SIZE_SETTINGS));
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
-  const [availableKeys, setAvailableKeys] = useState<APIKeyItem[]>([]);
-  const [availableGroups, setAvailableGroups] = useState<GroupItem[]>([]);
-  const [selectedKeyId, setSelectedKeyId] = useState<number | null>(null);
-  const [resolvedAPIKey, setResolvedAPIKey] = useState('');
   const [error, setError] = useState('');
+  const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
   const [interactionNotice, setInteractionNotice] = useState('');
   const [hoveredCopyTarget, setHoveredCopyTarget] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -517,59 +605,27 @@ export default function PlaygroundPage() {
 
   useEffect(() => {
     api.listConversations().then(setConversations).catch(() => {});
-    api.getUserInfo().then(async info => {
-      setUserInfo(info);
-      const sessionKey = sessionStorage.getItem('apikey_session_secret') || '';
-      if (info.api_key_id && sessionKey) {
-        setSelectedKeyId(info.api_key_id);
-        setResolvedAPIKey(sessionKey);
-      }
-    }).catch(() => {});
-    api.listAPIKeys().then(resp => setAvailableKeys(resp.list.filter(item => item.status === 'active' && item.group_id != null))).catch(() => {});
-    api.listGroups().then(resp => setAvailableGroups(resp.list)).catch(() => {});
-  }, []);
-
-  useEffect(() => {
+    api.getUserInfo().then(setUserInfo).catch(() => {});
     let cancelled = false;
-
-    const loadModels = async () => {
-      const sessionKey = userInfo?.api_key_id && (!selectedKeyId || selectedKeyId === userInfo.api_key_id)
-        ? sessionStorage.getItem('apikey_session_secret') || ''
-        : '';
-      let apiKey = resolvedAPIKey || sessionKey;
-
-      try {
-        if (!apiKey && selectedKeyId) {
-          const revealed = await api.revealAPIKey(selectedKeyId);
-          apiKey = revealed.key || '';
-          if (!cancelled) setResolvedAPIKey(apiKey);
-        }
-
-        if (!apiKey) {
-          if (!cancelled) {
-            setModels([]);
-            setSelectedModel('');
-          }
-          return;
-        }
-
-        const nextModels = await api.listModelsByAPIKey(apiKey);
-        if (cancelled) return;
-        setModels(nextModels);
-        setSelectedModel(current => (
-          nextModels.some(item => item.id === current) ? current : nextModels[0]?.id || ''
-        ));
-      } catch (e) {
-        if (cancelled) return;
-        setModels([]);
-        setSelectedModel('');
-        setError(e instanceof Error ? e.message : 'Failed to load models');
-      }
-    };
-
-    loadModels();
+    api.listPlatforms().then(async nextPlatforms => {
+      if (cancelled) return;
+      setPlatforms(nextPlatforms);
+      const modelLists = await Promise.all(nextPlatforms.map(platform => api.listModels(platform.name).catch(() => [])));
+      if (cancelled) return;
+      const nextModels = modelLists.flat();
+      setModels(nextModels);
+      setSelectedModel(current => (
+        nextModels.some(item => modelOptionValue(item) === current) ? current : (nextModels[0] ? modelOptionValue(nextModels[0]) : '')
+      ));
+    }).catch(e => {
+      if (cancelled) return;
+      setModels([]);
+      setSelectedModel('');
+      setRetryRequest(null);
+      setError(e instanceof Error ? e.message : 'Failed to load models');
+    });
     return () => { cancelled = true; };
-  }, [resolvedAPIKey, selectedKeyId, userInfo?.api_key_id]);
+  }, []);
 
   useEffect(() => {
     activeIdRef.current = activeId;
@@ -617,43 +673,21 @@ export default function PlaygroundPage() {
     return () => window.clearTimeout(timer);
   }, [interactionNotice]);
 
-  const resolveGroupID = useCallback(() => {
-    const keyID = selectedKeyId || userInfo?.api_key_id;
-    const selectedKey = availableKeys.find(item => item.id === keyID);
-    return selectedKey?.group_id || 0;
-  }, [availableKeys, selectedKeyId, userInfo]);
+  const resolveGroupID = useCallback(() => 0, []);
 
-  const selectedGroupPlatform = (() => {
-    const groupID = resolveGroupID();
-    if (groupID) {
-      return availableGroups.find(item => item.id === groupID)?.platform || '';
-    }
-    return userInfo?.api_key_platform || '';
-  })();
+  const updateImageSizeSettings = useCallback((patch: Partial<ImageSizeSettings>) => {
+    setImageSizeSettings(current => ({ ...current, ...patch }));
+  }, []);
 
-  const selectedModelInfo = models.find(item => item.id === selectedModel);
+  const selectedModelInfo = models.find(item => modelOptionValue(item) === selectedModel);
+  const selectedModelID = selectedModelInfo?.id || '';
+  const selectedModelPlatform = selectedModelInfo?.platform || '';
   const selectedModelIsImage = isImageModel(selectedModelInfo);
   const selectedModelSupportsReasoning = supportsReasoning(selectedModelInfo);
+  const resolvedImageSize = resolveImageSize(imageSizeSettings);
+  const displayedImageSize = imageSizeSummary(imageSizeSettings);
 
-  const ensureAPIKey = useCallback(async () => {
-    if (resolvedAPIKey) return resolvedAPIKey;
-    if (userInfo?.api_key_id && (!selectedKeyId || selectedKeyId === userInfo.api_key_id)) {
-      const sessionKey = sessionStorage.getItem('apikey_session_secret') || '';
-      if (sessionKey) {
-        setResolvedAPIKey(sessionKey);
-        return sessionKey;
-      }
-    }
-    if (!selectedKeyId) {
-      throw new Error('API key required');
-    }
-    const revealed = await api.revealAPIKey(selectedKeyId);
-    if (!revealed.key) {
-      throw new Error('Failed to reveal API key');
-    }
-    setResolvedAPIKey(revealed.key);
-    return revealed.key;
-  }, [resolvedAPIKey, selectedKeyId, userInfo]);
+  const selectedPlatform = selectedModelPlatform;
 
   const createConversation = useCallback(() => {
     const now = new Date().toISOString();
@@ -662,8 +696,8 @@ export default function PlaygroundPage() {
       user_id: userInfo?.id || 0,
       title: '',
       group_id: resolveGroupID(),
-      platform: selectedGroupPlatform,
-      model: selectedModel,
+      platform: selectedPlatform,
+      model: selectedModelID,
       created_at: now,
       updated_at: now,
     };
@@ -672,10 +706,11 @@ export default function PlaygroundPage() {
     setMessages([]);
     setPendingImages([]);
     setError('');
+    setRetryRequest(null);
     if (isMobile) {
       setSidebarOpen(false);
     }
-  }, [isMobile, resolveGroupID, selectedGroupPlatform, selectedModel, userInfo?.id]);
+  }, [isMobile, resolveGroupID, selectedPlatform, selectedModelID, userInfo?.id]);
 
   const deleteConversation = useCallback(async (id: number) => {
     const confirmed = await window.airgate?.confirm?.(t('playground.delete_conversation_confirm'), {
@@ -710,11 +745,24 @@ export default function PlaygroundPage() {
     groupID,
     platform,
     isImageRequest,
+    imageSize,
     supportsReasoning: requestSupportsReasoning,
-    apiKey: providedAPIKey,
+    reasoningEffort: requestReasoningEffort,
     titleContent,
   }: StreamAssistantOptions) => {
+    const nextRetryRequest: RetryRequest = {
+      conversationID,
+      requestMessages: requestMessages.map(msg => ({ ...msg })),
+      model,
+      groupID,
+      platform,
+      isImageRequest,
+      imageSize,
+      supportsReasoning: requestSupportsReasoning,
+      reasoningEffort: requestReasoningEffort,
+    };
     setError('');
+    setRetryRequest(null);
     setIsStreaming(true);
     setStreamConversationId(conversationID);
     streamContextRef.current = { conversationId: conversationID, model };
@@ -722,20 +770,19 @@ export default function PlaygroundPage() {
     setStreamReasoning('');
 
     try {
-      const apiKey = providedAPIKey || await ensureAPIKey();
       const abort = new AbortController();
       abortRef.current = abort;
 
       let accumulated = '';
       let accumulatedReasoning = '';
       await chatCompletionsStream(
-        apiKey,
+        platform,
         {
           model,
           messages: requestMessages.map(msg => ({ role: msg.role, content: toChatMessageContent(msg.role, msg.content) })),
           stream: true,
-          ...(isImageRequest ? { size: imageSize } : {}),
-          ...(requestSupportsReasoning ? { reasoning_effort: reasoningEffort } : {}),
+          ...(isImageRequest && imageSize ? { size: imageSize } : {}),
+          ...(requestSupportsReasoning ? { reasoning_effort: requestReasoningEffort ?? reasoningEffort } : {}),
         },
         {
           onData: (text) => {
@@ -750,6 +797,7 @@ export default function PlaygroundPage() {
             if (!accumulated) {
               if (activeIdRef.current === conversationID) {
                 setError(t('playground.no_response'));
+                setRetryRequest(nextRetryRequest);
               }
               setStreamContent('');
               setStreamReasoning('');
@@ -773,6 +821,7 @@ export default function PlaygroundPage() {
             if (activeIdRef.current === conversationID) {
               setMessages(prev => [...prev, persisted]);
             }
+            setRetryRequest(null);
             if (titleContent) {
               setConversations(prev => prev.map(c =>
                 c.id === conversationID && !c.title
@@ -789,6 +838,7 @@ export default function PlaygroundPage() {
           onError: (err) => {
             if (activeIdRef.current === conversationID) {
               setError(err);
+              setRetryRequest(nextRetryRequest);
             }
             setIsStreaming(false);
             setStreamContent('');
@@ -802,6 +852,7 @@ export default function PlaygroundPage() {
     } catch (e) {
       if (activeIdRef.current === conversationID) {
         setError(e instanceof Error ? e.message : 'stream failed');
+        setRetryRequest(nextRetryRequest);
       }
       setIsStreaming(false);
       setStreamContent('');
@@ -809,7 +860,7 @@ export default function PlaygroundPage() {
       setStreamConversationId(null);
       streamContextRef.current = null;
     }
-  }, [ensureAPIKey, imageSize, reasoningEffort, t]);
+  }, [reasoningEffort, t]);
 
   const sendMessage = useCallback(async () => {
     if ((!input.trim() && pendingImages.length === 0) || isStreaming || !activeId) return;
@@ -822,8 +873,9 @@ export default function PlaygroundPage() {
       conversation_id: activeId,
       role: 'user',
       content,
-      platform: selectedGroupPlatform,
-      model: selectedModel,
+      reasoning_effort: selectedModelSupportsReasoning ? reasoningEffort : undefined,
+      platform: selectedPlatform,
+      model: selectedModelID,
       group_id: groupID,
       input_tokens: 0,
       output_tokens: 0,
@@ -840,21 +892,24 @@ export default function PlaygroundPage() {
       fileInputRef.current.value = '';
     }
     setError('');
+    setRetryRequest(null);
     setMessages(requestMessages);
     setIsStreaming(true);
     setStreamConversationId(conversationID);
-    streamContextRef.current = { conversationId: conversationID, model: selectedModel };
+    streamContextRef.current = { conversationId: conversationID, model: selectedModelID };
     setStreamContent('');
     setStreamReasoning('');
 
     try {
-      const apiKey = await ensureAPIKey();
+      if (!selectedPlatform || !selectedModelID) {
+        throw new Error('Model required');
+      }
       if (conversationID === DRAFT_CONVERSATION_ID) {
         const conv = await api.createConversation({
           title: '',
           group_id: groupID,
-          platform: selectedGroupPlatform,
-          model: selectedModel,
+          platform: selectedPlatform,
+          model: selectedModelID,
         });
         conversationID = conv.id;
         if (activeIdRef.current === DRAFT_CONVERSATION_ID) {
@@ -869,20 +924,22 @@ export default function PlaygroundPage() {
         conversation_id: conversationID,
         role: 'user',
         content,
-        platform: selectedGroupPlatform,
-        model: selectedModel,
+        reasoning_effort: selectedModelSupportsReasoning ? reasoningEffort : undefined,
+        platform: selectedPlatform,
+        model: selectedModelID,
         group_id: groupID,
       });
 
       await streamAssistantResponse({
         conversationID,
         requestMessages: requestMessages.map(msg => ({ ...msg, conversation_id: conversationID })),
-        model: selectedModel,
+        model: selectedModelID,
         groupID,
-        platform: selectedGroupPlatform,
+        platform: selectedPlatform,
         isImageRequest: selectedModelIsImage,
+        imageSize: selectedModelIsImage ? resolvedImageSize : undefined,
         supportsReasoning: selectedModelSupportsReasoning,
-        apiKey,
+        reasoningEffort,
         titleContent: content,
       });
     } catch (e) {
@@ -895,7 +952,7 @@ export default function PlaygroundPage() {
       setStreamConversationId(null);
       streamContextRef.current = null;
     }
-  }, [activeId, input, isStreaming, messages, pendingImages, resolveGroupID, selectedGroupPlatform, selectedModel, selectedModelIsImage, selectedModelSupportsReasoning, streamAssistantResponse]);
+  }, [activeId, input, isStreaming, messages, pendingImages, reasoningEffort, resolveGroupID, resolvedImageSize, selectedPlatform, selectedModelID, selectedModelIsImage, selectedModelSupportsReasoning, streamAssistantResponse]);
 
   const addImageFiles = useCallback(async (files: File[]) => {
     if (!files.length) return;
@@ -905,7 +962,9 @@ export default function PlaygroundPage() {
       if (!nextImages.length) return;
       setPendingImages(prev => [...prev, ...nextImages]);
       setError('');
+      setRetryRequest(null);
     } catch (err) {
+      setRetryRequest(null);
       setError(err instanceof Error ? err.message : 'Failed to read image');
     }
   }, []);
@@ -956,20 +1015,22 @@ export default function PlaygroundPage() {
   }, [streamContent, streamReasoning]);
 
   const activeConv = conversations.find(c => c.id === activeId);
+  const lastMessage = messages[messages.length - 1];
+  const hasRecoverableUserMessage = Boolean(activeId && activeId !== DRAFT_CONVERSATION_ID && lastMessage?.role === 'user' && !error && !isStreaming);
   const isActiveConversationStreaming = isStreaming && streamConversationId === activeId;
-  const hasSelectedAPIKey = Boolean(userInfo?.api_key_id || selectedKeyId);
-  const canSendMessage = Boolean(input.trim() || pendingImages.length > 0) && hasSelectedAPIKey && !isStreaming;
+  const canSendMessage = Boolean(input.trim() || pendingImages.length > 0) && Boolean(selectedPlatform && selectedModelID) && !isStreaming;
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (!hasSelectedAPIKey) {
-        setError('API key required');
+      if (!selectedPlatform || !selectedModelID) {
+        setRetryRequest(null);
+        setError('Select a model first');
         return;
       }
       sendMessage();
     }
-  }, [hasSelectedAPIKey, sendMessage]);
+  }, [selectedModelID, selectedPlatform, sendMessage]);
 
   const triggerImagePicker = useCallback(() => {
     fileInputRef.current?.click();
@@ -982,10 +1043,54 @@ export default function PlaygroundPage() {
 
   const openConversation = useCallback((id: number) => {
     setActiveId(id);
+    setError('');
+    setRetryRequest(null);
     if (isMobile) {
       setSidebarOpen(false);
     }
   }, [isMobile]);
+
+  const regenerateLastResponse = useCallback(() => {
+    if (!retryRequest || isStreaming || activeId !== retryRequest.conversationID) return;
+
+    const request = retryRequest;
+    setError('');
+    setRetryRequest(null);
+    void streamAssistantResponse({
+      ...request,
+      requestMessages: request.requestMessages.map(msg => ({ ...msg })),
+    });
+  }, [activeId, isStreaming, retryRequest, streamAssistantResponse]);
+
+  const regenerateUnfinishedResponse = useCallback(() => {
+    if (isStreaming || !activeId || activeId === DRAFT_CONVERSATION_ID) return;
+    const lastUserMessage = messages[messages.length - 1];
+    if (lastUserMessage?.role !== 'user') return;
+
+    const requestModel = lastUserMessage.model || activeConv?.model || selectedModelID;
+    const requestPlatform = lastUserMessage.platform || activeConv?.platform || selectedPlatform;
+    if (!requestModel || !requestPlatform) {
+      setError('Model required');
+      return;
+    }
+
+    const requestModelInfo = models.find(item => item.id === requestModel && item.platform === requestPlatform) || models.find(item => item.id === requestModel);
+    const isImageRequest = isImageModel(requestModelInfo) || isImageModelIdentifier(requestModel);
+    const shouldUseReasoning = supportsReasoning(requestModelInfo) || Boolean(lastUserMessage.reasoning_effort);
+    setError('');
+    setRetryRequest(null);
+    void streamAssistantResponse({
+      conversationID: activeId,
+      requestMessages: messages.map(msg => ({ ...msg })),
+      model: requestModel,
+      groupID: lastUserMessage.group_id || activeConv?.group_id || resolveGroupID(),
+      platform: requestPlatform,
+      isImageRequest,
+      imageSize: isImageRequest ? resolvedImageSize : undefined,
+      supportsReasoning: shouldUseReasoning,
+      reasoningEffort: lastUserMessage.reasoning_effort || reasoningEffort,
+    });
+  }, [activeConv, activeId, isStreaming, messages, models, reasoningEffort, resolveGroupID, resolvedImageSize, selectedModelID, selectedPlatform, streamAssistantResponse]);
 
   const handleImagePreview = useCallback((url: string, alt: string) => {
     setPreviewImage({ url, alt });
@@ -1002,6 +1107,7 @@ export default function PlaygroundPage() {
 
     const sourceIndex = messages.slice(0, messageIndex).map(msg => msg.role).lastIndexOf('user');
     if (sourceIndex < 0) {
+      setRetryRequest(null);
       setError(t('playground.no_image_prompt'));
       return;
     }
@@ -1009,18 +1115,20 @@ export default function PlaygroundPage() {
     const sourceMessages = messages.slice(0, sourceIndex + 1);
     const sourceMessage = messages[sourceIndex];
     const assistantMessage = messages[messageIndex];
-    const requestModel = assistantMessage.model || selectedModel;
-    const requestModelInfo = models.find(item => item.id === requestModel);
+    const requestModel = assistantMessage.model || selectedModelID;
+    const requestPlatform = assistantMessage.platform || sourceMessage.platform || selectedPlatform;
+    const requestModelInfo = models.find(item => item.id === requestModel && item.platform === requestPlatform) || models.find(item => item.id === requestModel);
     void streamAssistantResponse({
       conversationID: activeId,
       requestMessages: sourceMessages,
       model: requestModel,
       groupID: assistantMessage.group_id || sourceMessage.group_id || resolveGroupID(),
-      platform: assistantMessage.platform || sourceMessage.platform || selectedGroupPlatform,
+      platform: requestPlatform,
       isImageRequest: true,
+      imageSize: resolvedImageSize,
       supportsReasoning: supportsReasoning(requestModelInfo),
     });
-  }, [activeId, isStreaming, messages, models, resolveGroupID, selectedGroupPlatform, selectedModel, streamAssistantResponse, t]);
+  }, [activeId, isStreaming, messages, models, resolveGroupID, resolvedImageSize, selectedPlatform, selectedModelID, streamAssistantResponse, t]);
 
   const handleMessageCopy = useCallback((content: string) => {
     void copyText(content)
@@ -1204,29 +1312,6 @@ export default function PlaygroundPage() {
 
             <div style={{ ...styles.selectors, ...(isMobile ? styles.selectorsMobile : null) }}>
               <div style={{ ...styles.selectorGroup, ...(isMobile ? styles.selectorGroupMobile : null) }}>
-                <label style={styles.selectorLabel}>API Key</label>
-                <select
-                  style={{ ...styles.select, ...(isMobile ? styles.selectMobile : null) }}
-                  value={selectedKeyId ?? userInfo?.api_key_id ?? ''}
-                  onChange={e => {
-                    const nextID = Number(e.target.value || 0);
-                    setSelectedKeyId(nextID || null);
-                    setResolvedAPIKey('');
-                  }}
-                >
-                  <option value="">Select key</option>
-                  {userInfo?.api_key_id && !availableKeys.some(item => item.id === userInfo.api_key_id) && (
-                    <option value={userInfo.api_key_id}>{userInfo.api_key_name || 'Current key'}</option>
-                  )}
-                  {availableKeys.map(item => (
-                    <option key={item.id} value={item.id}>{item.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              {!isMobile && <div style={styles.selectorDivider} />}
-
-              <div style={{ ...styles.selectorGroup, ...(isMobile ? styles.selectorGroupMobile : null) }}>
                 <label style={styles.selectorLabel}>{t('playground.model')}</label>
                 <select
                   style={{ ...styles.select, ...(isMobile ? styles.selectMobile : null) }}
@@ -1234,8 +1319,8 @@ export default function PlaygroundPage() {
                   onChange={e => setSelectedModel(e.target.value)}
                 >
                   {models.map(m => (
-                    <option key={m.id} value={m.id}>
-                      {m.name || m.id}{isImageModel(m) ? ' · image' : supportsReasoning(m) ? ' · reasoning' : ''}
+                    <option key={modelOptionValue(m)} value={modelOptionValue(m)}>
+                      {m.name || m.id} · {platformDisplayName(platforms, m.platform)}{isImageModel(m) ? ' · image' : supportsReasoning(m) ? ' · reasoning' : ''}
                     </option>
                   ))}
                 </select>
@@ -1246,15 +1331,44 @@ export default function PlaygroundPage() {
                   {!isMobile && <div style={styles.selectorDivider} />}
                   <div style={{ ...styles.selectorGroup, ...(isMobile ? styles.selectorGroupMobile : null) }}>
                     <label style={styles.selectorLabel}>Size</label>
-                    <select
-                      style={{ ...styles.select, ...(isMobile ? styles.selectMobile : null) }}
-                      value={imageSize}
-                      onChange={e => setImageSize(e.target.value as ImageSize)}
-                    >
-                      {IMAGE_SIZE_OPTIONS.map(option => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
+                    <div style={{ ...styles.imageSizeInlineControls, ...(isMobile ? styles.imageSizeInlineControlsMobile : null) }}>
+                      <select
+                        style={{ ...styles.imageSizeMiniSelect, ...(isMobile ? styles.imageSizeMiniSelectMobile : null) }}
+                        value={imageSizeSettings.mode}
+                        onChange={e => updateImageSizeSettings({ mode: e.target.value as ImageSizeMode })}
+                        aria-label="Image size mode"
+                      >
+                        <option value="auto">Auto</option>
+                        <option value="ratio">Ratio</option>
+                      </select>
+
+                      {imageSizeSettings.mode === 'ratio' && (
+                        <>
+                          <select
+                            style={{ ...styles.imageSizeMiniSelect, ...(isMobile ? styles.imageSizeMiniSelectMobile : null) }}
+                            value={imageSizeSettings.baseResolution}
+                            onChange={e => updateImageSizeSettings({ baseResolution: Number(e.target.value) as BaseResolution })}
+                            aria-label="Base resolution"
+                          >
+                            {BASE_RESOLUTION_OPTIONS.map(option => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                          <select
+                            style={{ ...styles.imageSizeMiniSelect, ...(isMobile ? styles.imageSizeMiniSelectMobile : null) }}
+                            value={imageSizeSettings.ratio}
+                            onChange={e => updateImageSizeSettings({ ratio: e.target.value as ImageRatio })}
+                            aria-label="Image ratio"
+                          >
+                            {IMAGE_RATIO_OPTIONS.map(option => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </>
+                      )}
+
+                      <span style={styles.imageSizeInlinePreview}>{displayedImageSize}</span>
+                    </div>
                   </div>
                 </>
               )}
@@ -1449,13 +1563,55 @@ export default function PlaygroundPage() {
             </div>
           )}
 
+          {hasRecoverableUserMessage && (
+            <div style={{ ...styles.errorBar, ...styles.recoverableBar, ...(isMobile ? styles.errorBarMobile : null) }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 8v4m0 4h.01" />
+              </svg>
+              <span style={styles.errorMessage}>{t('playground.response_unfinished', { defaultValue: 'Response was interrupted before the assistant replied.' })}</span>
+              <button
+                type="button"
+                style={styles.recoverableRetryBtn}
+                onClick={regenerateUnfinishedResponse}
+                title={t('playground.regenerate')}
+                aria-label={t('playground.regenerate')}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 12a9 9 0 0 1-15.6 6" />
+                  <path d="M3 12a9 9 0 0 1 15.6-6" />
+                  <path d="M19 2v4h-4" />
+                  <path d="M5 22v-4h4" />
+                </svg>
+                {t('playground.regenerate')}
+              </button>
+            </div>
+          )}
+
           {error && (
             <div style={{ ...styles.errorBar, ...(isMobile ? styles.errorBarMobile : null) }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="10" />
                 <path d="M12 8v4m0 4h.01" />
               </svg>
-              {error}
+              <span style={styles.errorMessage}>{error}</span>
+              {retryRequest && retryRequest.conversationID === activeId && !isStreaming && (
+                <button
+                  type="button"
+                  style={styles.errorRetryBtn}
+                  onClick={regenerateLastResponse}
+                  title={t('playground.regenerate')}
+                  aria-label={t('playground.regenerate')}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 12a9 9 0 0 1-15.6 6" />
+                    <path d="M3 12a9 9 0 0 1 15.6-6" />
+                    <path d="M19 2v4h-4" />
+                    <path d="M5 22v-4h4" />
+                  </svg>
+                  {t('playground.regenerate')}
+                </button>
+              )}
             </div>
           )}
 
@@ -1543,7 +1699,7 @@ export default function PlaygroundPage() {
                       }}
                       onClick={sendMessage}
                       disabled={!canSendMessage}
-                      title={hasSelectedAPIKey ? undefined : 'Select an API key first'}
+                      title={selectedPlatform && selectedModelID ? undefined : 'Select a model first'}
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M22 2L11 13" />
@@ -1826,6 +1982,43 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '5px 7px',
     background: cssVar('bgDeep'),
     fontSize: 12,
+  },
+  imageSizeInlineControls: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 0,
+  },
+  imageSizeInlineControlsMobile: {
+    flexWrap: 'wrap',
+  },
+  imageSizeMiniSelect: {
+    height: 28,
+    maxWidth: 96,
+    padding: '3px 6px',
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    borderRadius: cssVar('radiusSm'),
+    background: cssVar('bgDeep'),
+    color: cssVar('text'),
+    fontSize: 12,
+    fontWeight: 600,
+    outline: 'none',
+    fontFamily: cssVar('fontSans'),
+  },
+  imageSizeMiniSelectMobile: {
+    flex: '1 1 74px',
+    maxWidth: 'none',
+  },
+  imageSizeInlinePreview: {
+    minWidth: 82,
+    padding: '3px 7px',
+    borderRadius: cssVar('radiusSm'),
+    background: cssVar('primarySubtle'),
+    color: cssVar('primary'),
+    fontSize: 12,
+    fontWeight: 700,
+    fontFamily: cssVar('fontMono'),
+    whiteSpace: 'nowrap',
   },
   topBarTitle: {
     fontSize: 12,
@@ -2264,6 +2457,43 @@ const styles: Record<string, React.CSSProperties> = {
   },
   errorBarMobile: {
     margin: '8px 14px',
+  },
+  errorMessage: {
+    flex: 1,
+    minWidth: 0,
+  },
+  recoverableBar: {
+    background: cssVar('primarySubtle'),
+    color: cssVar('primary'),
+    borderColor: 'rgba(45, 212, 191, 0.22)',
+  },
+  errorRetryBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '5px 10px',
+    borderRadius: '999px',
+    border: '1px solid rgba(251, 113, 133, 0.28)',
+    background: 'rgba(251, 113, 133, 0.1)',
+    color: cssVar('danger'),
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: 'pointer',
+    fontFamily: cssVar('fontSans'),
+  },
+  recoverableRetryBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '5px 10px',
+    borderRadius: '999px',
+    border: '1px solid rgba(45, 212, 191, 0.3)',
+    background: 'rgba(45, 212, 191, 0.12)',
+    color: cssVar('primary'),
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: 'pointer',
+    fontFamily: cssVar('fontSans'),
   },
 
   // ── Input ──

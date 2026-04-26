@@ -46,6 +46,8 @@ async function coreRequest<T>(method: string, path: string, body?: unknown): Pro
 
 // ── Types ──
 
+export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
 export interface Conversation {
   id: number;
   user_id: number;
@@ -63,6 +65,7 @@ export interface Message {
   role: string;
   content: string;
   reasoning?: string;
+  reasoning_effort?: ReasoningEffort;
   platform: string;
   model: string;
   group_id: number;
@@ -75,6 +78,7 @@ export interface Message {
 export interface ModelInfo {
   id: string;
   name: string;
+  platform?: string;
   input_price: number;
   output_price: number;
   context_window: number;
@@ -84,18 +88,38 @@ export interface ModelInfo {
 }
 
 interface ProviderModelInfo {
-  id: string;
+  id?: string;
+  ID?: string;
   name?: string;
+  Name?: string;
   input_price?: number;
+  InputPrice?: number;
   output_price?: number;
+  OutputPrice?: number;
   context_window?: number;
+  ContextWindow?: number;
   max_output_tokens?: number;
+  MaxOutputTokens?: number;
   image_only?: boolean;
+  ImageOnly?: boolean;
   capabilities?: string[];
+  Capabilities?: string[];
 }
 
 interface ProviderModelListResponse {
   data?: ProviderModelInfo[];
+}
+
+export interface PlatformInfo {
+  name: string;
+  display_name: string;
+}
+
+interface ProviderPlatformInfo {
+  name?: string;
+  Name?: string;
+  display_name?: string;
+  DisplayName?: string;
 }
 
 export interface UserInfo {
@@ -115,6 +139,7 @@ export interface PersistedMessageRequest {
   role: string;
   content: string;
   reasoning?: string;
+  reasoning_effort?: ReasoningEffort;
   platform?: string;
   model?: string;
   group_id?: number;
@@ -177,51 +202,46 @@ export const api = {
 
   persistMessage: (data: PersistedMessageRequest) => request<Message>('POST', '/messages', data),
 
-  listModelsByAPIKey: async (apiKey: string) => {
-    const resp = await fetch('/v1/models', {
-      headers: { 'Authorization': `Bearer ${apiKey}` },
-    });
+  listPlatforms: async () => {
+    const payload = await request<ProviderPlatformInfo[]>('GET', '/platforms');
+    return payload
+      .map(item => {
+        const name = item.name || item.Name || '';
+        const displayName = item.display_name || item.DisplayName || name;
+        return { name, display_name: displayName };
+      })
+      .filter(item => item.name);
+  },
 
-    if (!resp.ok) {
-      const text = await resp.text();
-      let msg = `HTTP ${resp.status}`;
-      try {
-        const parsed = JSON.parse(text);
-        msg = parsed.error?.message || parsed.error || parsed.message || msg;
-      } catch { /* ignore */ }
-      throw new Error(msg);
-    }
-
-    const payload = await resp.json() as ProviderModelListResponse | ProviderModelInfo[];
+  listModels: async (platform: string) => {
+    const payload = await request<ProviderModelListResponse | ProviderModelInfo[]>('GET', `/models?platform=${encodeURIComponent(platform)}`);
     const data = Array.isArray(payload) ? payload : payload.data || [];
-    return data.map(item => ({
-      id: item.id,
-      name: item.name || item.id,
-      input_price: item.input_price || 0,
-      output_price: item.output_price || 0,
-      context_window: item.context_window || 0,
-      max_output_tokens: item.max_output_tokens || 0,
-      image_only: Boolean(item.image_only),
-      capabilities: item.capabilities || [],
-    }));
+    return data.map(item => {
+      const id = item.id || item.ID || '';
+      return {
+        id,
+        name: item.name || item.Name || id,
+        platform,
+        input_price: item.input_price ?? item.InputPrice ?? 0,
+        output_price: item.output_price ?? item.OutputPrice ?? 0,
+        context_window: item.context_window ?? item.ContextWindow ?? 0,
+        max_output_tokens: item.max_output_tokens ?? item.MaxOutputTokens ?? 0,
+        image_only: Boolean(item.image_only ?? item.ImageOnly),
+        capabilities: item.capabilities || item.Capabilities || [],
+      };
+    }).filter(item => item.id);
   },
 
   getUserInfo: () => coreRequest<UserInfo>('GET', '/users/me'),
-
-  listAPIKeys: () => coreRequest<PagedResponse<APIKeyItem>>('GET', '/api-keys?page=1&page_size=100'),
-
-  revealAPIKey: (id: number) => coreRequest<APIKeyItem>('GET', `/api-keys/${id}/reveal`),
-
-  listGroups: () => coreRequest<PagedResponse<GroupItem>>('GET', '/groups?page=1&page_size=100'),
 };
 
 export async function chatCompletionsStream(
-  apiKey: string,
+  platform: string,
   body: {
     model: string;
     messages: Array<{ role: string; content: ChatMessageContent }>;
     stream: true;
-    reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+    reasoning_effort?: ReasoningEffort;
     size?: string;
     stream_options?: { include_usage?: boolean };
   },
@@ -236,12 +256,13 @@ export async function chatCompletionsStream(
     },
   };
 
-  const resp = await fetch('/v1/chat/completions', {
+  const resp = await fetch(`${BASE}/chat/completions`, {
     method: 'POST',
     headers: {
+      ...authHeaders(),
       'Content-Type': 'application/json',
       'Accept': 'text/event-stream',
-      'Authorization': `Bearer ${apiKey}`,
+      'X-Airgate-Platform': platform,
     },
     body: JSON.stringify(requestBody),
     signal,

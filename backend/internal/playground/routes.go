@@ -2,6 +2,7 @@ package playground
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ func (p *Plugin) RegisterRoutes(r sdk.RouteRegistrar) {
 	// Messages
 	r.Handle(http.MethodGet, "/messages/", p.requireUser(p.handleListMessages))
 	r.Handle(http.MethodPost, "/messages", p.requireUser(p.handlePersistMessage))
+	r.Handle(http.MethodPost, "/chat/completions", p.requireUser(p.handleChatCompletions))
 
 	// Metadata (platforms, models, user info)
 	r.Handle(http.MethodGet, "/platforms", p.requireUser(p.handleListPlatforms))
@@ -183,6 +185,77 @@ func (p *Plugin) handlePersistMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, msg)
 }
 
+func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	platform := strings.TrimSpace(r.Header.Get("X-Airgate-Platform"))
+	if platform == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "platform required")
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "invalid request body")
+		return
+	}
+	var fields struct {
+		Model string `json:"model"`
+	}
+	_ = json.Unmarshal(body, &fields)
+	if strings.TrimSpace(fields.Model) == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "model required")
+		return
+	}
+
+	headers := make(http.Header)
+	headers.Set("Content-Type", "application/json")
+	headers.Set("Accept", "text/event-stream")
+	headers.Set("X-Airgate-Platform", platform)
+
+	committed := false
+	err = p.host.ForwardStream(r.Context(), sdk.HostForwardRequest{
+		UserID:  int64(parseUserID(r)),
+		GroupID: 0,
+		Model:   fields.Model,
+		Method:  http.MethodPost,
+		Path:    "/v1/chat/completions",
+		Headers: headers,
+		Body:    body,
+		Stream:  true,
+	}, func(chunk sdk.HostForwardChunk) error {
+		if chunk.Done {
+			return nil
+		}
+		if !committed {
+			copyHeaders(w.Header(), chunk.Headers)
+			if w.Header().Get("Content-Type") == "" {
+				w.Header().Set("Content-Type", "text/event-stream")
+			}
+			status := chunk.StatusCode
+			if status == 0 {
+				status = http.StatusOK
+			}
+			w.WriteHeader(status)
+			committed = true
+		}
+		if len(chunk.Data) > 0 {
+			if _, err := w.Write(chunk.Data); err != nil {
+				return err
+			}
+		}
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		return nil
+	})
+	if err != nil {
+		p.logger.Warn("playground chat forward failed", "error", err)
+		if !committed {
+			writeOpenAIError(w, http.StatusServiceUnavailable, "server_error", "upstream_error", "请求暂时无法完成，请稍后重试")
+			return
+		}
+		_, _ = w.Write([]byte("data: {\"error\":{\"message\":\"请求暂时无法完成，请稍后重试\",\"type\":\"server_error\",\"code\":\"upstream_error\"}}\n\n"))
+	}
+}
+
 // ── Metadata Handlers ──
 
 func (p *Plugin) handleListPlatforms(w http.ResponseWriter, r *http.Request) {
@@ -239,5 +312,23 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	}
+}
+
+func writeOpenAIError(w http.ResponseWriter, status int, errType, code, message string) {
+	writeJSON(w, status, map[string]any{
+		"error": map[string]string{
+			"message": message,
+			"type":    errType,
+			"code":    code,
+		},
+	})
+}
+
+func copyHeaders(dst, src http.Header) {
+	for k, vals := range src {
+		for _, v := range vals {
+			dst.Add(k, v)
+		}
 	}
 }

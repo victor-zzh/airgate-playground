@@ -19,18 +19,19 @@ type Conversation struct {
 }
 
 type Message struct {
-	ID             int64     `json:"id"`
-	ConversationID int64     `json:"conversation_id"`
-	Role           string    `json:"role"`
-	Content        string    `json:"content"`
-	Reasoning      string    `json:"reasoning,omitempty"`
-	Platform       string    `json:"platform,omitempty"`
-	Model          string    `json:"model,omitempty"`
-	GroupID        int64     `json:"group_id,omitempty"`
-	InputTokens    int       `json:"input_tokens,omitempty"`
-	OutputTokens   int       `json:"output_tokens,omitempty"`
-	Cost           float64   `json:"cost,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID              int64     `json:"id"`
+	ConversationID  int64     `json:"conversation_id"`
+	Role            string    `json:"role"`
+	Content         string    `json:"content"`
+	Reasoning       string    `json:"reasoning,omitempty"`
+	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+	Platform        string    `json:"platform,omitempty"`
+	Model           string    `json:"model,omitempty"`
+	GroupID         int64     `json:"group_id,omitempty"`
+	InputTokens     int       `json:"input_tokens,omitempty"`
+	OutputTokens    int       `json:"output_tokens,omitempty"`
+	Cost            float64   `json:"cost,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 func migrate(db *sql.DB) error {
@@ -54,6 +55,7 @@ func migrate(db *sql.DB) error {
 			role            TEXT NOT NULL,
 			content         TEXT NOT NULL DEFAULT '',
 				reasoning       TEXT NOT NULL DEFAULT '',
+				reasoning_effort TEXT NOT NULL DEFAULT '',
 			platform        TEXT NOT NULL DEFAULT '',
 			model           TEXT NOT NULL DEFAULT '',
 			group_id        BIGINT NOT NULL DEFAULT 0,
@@ -64,6 +66,7 @@ func migrate(db *sql.DB) error {
 		);
 
 		ALTER TABLE playground_messages ADD COLUMN IF NOT EXISTS reasoning TEXT NOT NULL DEFAULT '';
+		ALTER TABLE playground_messages ADD COLUMN IF NOT EXISTS reasoning_effort TEXT NOT NULL DEFAULT '';
 
 			CREATE INDEX IF NOT EXISTS idx_playground_msg_conv ON playground_messages(conversation_id, created_at);
 	`)
