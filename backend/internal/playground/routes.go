@@ -203,18 +203,49 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var fields struct {
-		Model string `json:"model"`
+		Model  string `json:"model"`
+		Stream *bool  `json:"stream"`
 	}
 	_ = json.Unmarshal(body, &fields)
 	if strings.TrimSpace(fields.Model) == "" {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "model required")
 		return
 	}
+	stream := fields.Stream == nil || *fields.Stream
 
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
-	headers.Set("Accept", "text/event-stream")
 	headers.Set("X-Airgate-Platform", platform)
+	if !stream {
+		headers.Set("Accept", "application/json")
+		resp, err := p.host.Forward(r.Context(), sdk.HostForwardRequest{
+			UserID:  int64(parseUserID(r)),
+			GroupID: 0,
+			Model:   fields.Model,
+			Method:  http.MethodPost,
+			Path:    "/v1/chat/completions",
+			Headers: headers,
+			Body:    body,
+			Stream:  false,
+		})
+		if err != nil {
+			p.logger.Warn("playground chat forward failed", "error", err)
+			writeHostForwardError(w, err)
+			return
+		}
+		copyHeaders(w.Header(), resp.Headers)
+		if w.Header().Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", "application/json")
+		}
+		status := resp.StatusCode
+		if status == 0 {
+			status = http.StatusOK
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write(resp.Body)
+		return
+	}
+	headers.Set("Accept", "text/event-stream")
 
 	committed := false
 	err = p.host.ForwardStream(r.Context(), sdk.HostForwardRequest{

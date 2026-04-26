@@ -175,6 +175,23 @@ export type ChatMessageContent = string | Array<
   | { type: 'image_url'; image_url: { url: string } }
 >;
 
+export interface ChatCompletionResponse {
+  id?: string;
+  model?: string;
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
+  }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+    cost?: number;
+  };
+}
+
 export interface ChatCompletionCallbacks {
   onData: (text: string) => void;
   onReasoning: (text: string) => void;
@@ -252,6 +269,49 @@ export const api = {
   getUserInfo: () => coreRequest<UserInfo>('GET', '/users/me'),
 };
 
+export async function chatCompletion(
+  platform: string,
+  body: {
+    model: string;
+    messages: Array<{ role: string; content: ChatMessageContent }>;
+    stream?: false;
+    response_format?: { type: 'json_object' };
+  },
+  signal?: AbortSignal,
+): Promise<ChatCompletionResponse> {
+  const resp = await fetch(`${BASE}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(),
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-Airgate-Platform': platform,
+    },
+    body: JSON.stringify({ ...body, stream: false }),
+    signal,
+  });
+
+  const text = await resp.text();
+  let parsed: unknown = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch { /* ignore */ }
+
+  if (!resp.ok) {
+    if (resp.status === 401) {
+      localStorage.removeItem('token');
+      window.location.href = '/login';
+    }
+    const errorPayload = parsed as { error?: { message?: string } | string; message?: string } | null;
+    const message = typeof errorPayload?.error === 'string'
+      ? errorPayload.error
+      : errorPayload?.error?.message || errorPayload?.message || `HTTP ${resp.status}`;
+    throw new Error(message);
+  }
+
+  return (parsed || {}) as ChatCompletionResponse;
+}
+
 export async function editImage(platform: string, form: FormData, signal?: AbortSignal): Promise<ImageEditResponse> {
   const resp = await fetch(`${BASE}/images/edits`, {
     method: 'POST',
@@ -293,6 +353,7 @@ export async function chatCompletionsStream(
     stream: true;
     reasoning_effort?: ReasoningEffort;
     size?: string;
+    n?: number;
     stream_options?: { include_usage?: boolean };
   },
   callbacks: ChatCompletionCallbacks,

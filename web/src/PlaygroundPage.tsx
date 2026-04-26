@@ -1,7 +1,7 @@
 import { Children, cloneElement, isValidElement, useState, useEffect, useRef, useCallback, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cssVar } from '@airgate/theme';
-import { api, chatCompletionsStream, editImage as requestImageEdit } from './api';
+import { api, chatCompletion, chatCompletionsStream, editImage as requestImageEdit } from './api';
 import type { ChatMessageContent, Conversation, ImageEditResponse, Message, ModelInfo, PlatformInfo, ReasoningEffort, UserInfo } from './api';
 
 declare global {
@@ -24,8 +24,11 @@ const IMAGE_MODEL_RE = /(^|[-_])(?:gpt[-_]?image|image)(?:[-_.]|\d|$)/i;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MIN_SELECTION_SIZE = 8;
 const DEFAULT_MODEL_ID = 'gpt-5.5';
+const IMAGE_PROMPT_PLANNER_PLATFORM = 'openai';
+const IMAGE_PROMPT_PLANNER_MODEL = 'gpt-5.4-mini';
 const IMAGE_SIZE_ALIGNMENT = 16;
 const MAX_IMAGE_EDGE = 3840;
+const MAX_IMAGE_SHOTS = 4;
 const BASE_RESOLUTION_OPTIONS: Array<{ value: BaseResolution; label: string }> = [
   { value: 1024, label: '1K' },
   { value: 2048, label: '2K' },
@@ -366,6 +369,53 @@ function imageEditUsage(response: ImageEditResponse) {
   };
 }
 
+function appendImageContent(content: string, nextImageContent: string) {
+  return [content.trim(), nextImageContent.trim()].filter(Boolean).join('\n\n');
+}
+
+function normalizeImageShotPrompts(prompts: string[]) {
+  return prompts
+    .map(prompt => prompt.trim())
+    .filter(Boolean)
+    .slice(0, MAX_IMAGE_SHOTS)
+    .map((prompt, index, prompts) => [
+      `Shot ${index + 1} of ${prompts.length}. Generate exactly one standalone image for this shot.`,
+      'Do not create a collage, grid, contact sheet, split-screen, infographic, or multi-panel layout.',
+      prompt,
+    ].join(' '));
+}
+
+function parseImageShotPlan(content?: string) {
+  if (!content) return [];
+  try {
+    const parsed = JSON.parse(content) as { shots?: unknown };
+    if (!Array.isArray(parsed.shots)) return [];
+    return normalizeImageShotPrompts(parsed.shots.map(item => typeof item === 'string' ? item : ''));
+  } catch {
+    return [];
+  }
+}
+
+function contentWithImageShotPrompt(content: string, prompt: string) {
+  IMAGE_MARKDOWN_RE.lastIndex = 0;
+  const match = IMAGE_MARKDOWN_RE.exec(content);
+  IMAGE_MARKDOWN_RE.lastIndex = 0;
+  if (!match) return prompt;
+  return [prompt, content.slice(match.index).trim()].filter(Boolean).join('\n\n');
+}
+
+function imageShotRequestMessages(messages: Message[], prompt: string) {
+  const nextMessages = messages.map(msg => ({ ...msg }));
+  const userIndex = nextMessages.map(msg => msg.role).lastIndexOf('user');
+  if (userIndex >= 0) {
+    nextMessages[userIndex] = {
+      ...nextMessages[userIndex],
+      content: contentWithImageShotPrompt(nextMessages[userIndex].content, prompt),
+    };
+  }
+  return nextMessages;
+}
+
 function titleFromMessageContent(content: string) {
   const title = stripImageEditAnnotations(content).replace(IMAGE_MARKDOWN_RE, '[Image]').trim() || '[Image]';
   return title.slice(0, 30) + (title.length > 30 ? '...' : '');
@@ -544,6 +594,13 @@ function renderHeading(level: number, text: string, key: string, options: Messag
 }
 
 function renderImageGroup(text: string, key: string, options: MessageContentOptions = {}) {
+  const images = parseImageGroupImages(text);
+  if (!images) return null;
+
+  return renderImageGallery(images, key, options);
+}
+
+function parseImageGroupImages(text: string) {
   const images: Array<{ alt: string; url: string }> = [];
   let match: RegExpExecArray | null;
   IMAGE_MARKDOWN_ITEM_RE.lastIndex = 0;
@@ -555,6 +612,10 @@ function renderImageGroup(text: string, key: string, options: MessageContentOpti
   const remainder = text.replace(IMAGE_MARKDOWN_ITEM_RE, '').trim();
   if (!images.length || remainder) return null;
 
+  return images;
+}
+
+function renderImageGallery(images: Array<{ alt: string; url: string }>, key: string, options: MessageContentOptions = {}) {
   return (
     <div key={key} style={styles.imageGroup}>
       {images.map((image, index) => renderGeneratedImage(`${key}-${index}`, image.url, image.alt || options.generatedImageAlt || 'Generated image', options))}
@@ -618,25 +679,39 @@ function renderMessageContent(content: string, options: MessageContentOptions = 
   let quote: string[] = [];
   let listItems: Array<{ text: string; ordered: boolean }> = [];
   let codeLines: string[] = [];
+  let pendingImageGroup: Array<{ alt: string; url: string }> = [];
   let inCodeBlock = false;
   let nodeIndex = 0;
 
   const nextKey = (type: string) => `${type}-${nodeIndex++}`;
+  const flushPendingImageGroup = () => {
+    if (!pendingImageGroup.length) return;
+    nodes.push(renderImageGallery(pendingImageGroup, nextKey('images'), renderOptions));
+    pendingImageGroup = [];
+  };
   const flushParagraph = () => {
     if (!paragraph.length) return;
-    const key = nextKey('p');
     const text = paragraph.join('\n');
-    nodes.push(renderImageGroup(text, key, renderOptions) || <p key={key} style={styles.markdownParagraph}>{renderInlineMarkdown(text, key, renderOptions)}</p>);
+    const images = parseImageGroupImages(text);
+    if (images) {
+      pendingImageGroup.push(...images);
+    } else {
+      flushPendingImageGroup();
+      const key = nextKey('p');
+      nodes.push(<p key={key} style={styles.markdownParagraph}>{renderInlineMarkdown(text, key, renderOptions)}</p>);
+    }
     paragraph = [];
   };
   const flushQuote = () => {
     if (!quote.length) return;
+    flushPendingImageGroup();
     const key = nextKey('quote');
     nodes.push(<blockquote key={key} style={styles.markdownBlockquote}>{renderInlineMarkdown(quote.join('\n'), key, renderOptions)}</blockquote>);
     quote = [];
   };
   const flushList = () => {
     if (!listItems.length) return;
+    flushPendingImageGroup();
     const key = nextKey('list');
     const children = listItems.map((item, index) => (
       <li key={`${key}-${index}`} style={styles.markdownListItem}>{renderInlineMarkdown(item.text, `${key}-${index}`, renderOptions)}</li>
@@ -649,7 +724,12 @@ function renderMessageContent(content: string, options: MessageContentOptions = 
     flushQuote();
     flushList();
   };
+  const flushAllBlocks = () => {
+    flushBlocks();
+    flushPendingImageGroup();
+  };
   const flushCodeBlock = () => {
+    flushPendingImageGroup();
     const key = nextKey('code');
     nodes.push(<pre key={key} style={styles.markdownCodeBlock}><code>{codeLines.join('\n')}</code></pre>);
     codeLines = [];
@@ -662,7 +742,7 @@ function renderMessageContent(content: string, options: MessageContentOptions = 
         flushCodeBlock();
         inCodeBlock = false;
       } else {
-        flushBlocks();
+        flushAllBlocks();
         inCodeBlock = true;
       }
       continue;
@@ -680,13 +760,13 @@ function renderMessageContent(content: string, options: MessageContentOptions = 
 
     const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
-      flushBlocks();
+      flushAllBlocks();
       nodes.push(renderHeading(Math.min(headingMatch[1].length, 4), headingMatch[2].trim(), nextKey('heading'), renderOptions));
       continue;
     }
 
     if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) {
-      flushBlocks();
+      flushAllBlocks();
       nodes.push(<hr key={nextKey('hr')} style={styles.markdownDivider} />);
       continue;
     }
@@ -717,6 +797,7 @@ function renderMessageContent(content: string, options: MessageContentOptions = 
 
   if (inCodeBlock) flushCodeBlock();
   flushBlocks();
+  flushPendingImageGroup();
 
   const renderedNodes = appendTrailingInlineAction(nodes, options.trailingInlineAction);
   return renderedNodes.length > 0 ? renderedNodes : cleanContent;
@@ -992,14 +1073,164 @@ export default function PlaygroundPage() {
 
       let accumulated = '';
       let accumulatedReasoning = '';
+      const baseRequest = {
+        model,
+        messages: requestMessages.map(msg => ({ role: msg.role, content: toChatMessageContent(msg.role, msg.content) })),
+        stream: true as const,
+        ...(isImageRequest && imageSize ? { size: imageSize } : {}),
+        ...(requestSupportsReasoning ? { reasoning_effort: requestReasoningEffort ?? reasoningEffort } : {}),
+      };
+      const finishAssistantResponse = async (usage: { input_tokens: number; output_tokens: number; model: string; cost: number }) => {
+        if (!accumulated) {
+          if (activeIdRef.current === conversationID) {
+            setError(t('playground.no_response'));
+            setRetryRequest(nextRetryRequest);
+          }
+          setStreamContent('');
+          setStreamReasoning('');
+          setStreamConversationId(null);
+          streamContextRef.current = null;
+          setIsStreaming(false);
+          return;
+        }
+        const persisted = await api.persistMessage({
+          conversation_id: conversationID,
+          role: 'assistant',
+          content: accumulated,
+          reasoning: accumulatedReasoning,
+          platform,
+          model: usage.model || model,
+          group_id: groupID,
+          input_tokens: usage.input_tokens,
+          output_tokens: usage.output_tokens,
+          cost: usage.cost,
+        });
+        if (activeIdRef.current === conversationID) {
+          setMessages(prev => [...prev, persisted]);
+        }
+        setRetryRequest(null);
+        if (titleContent) {
+          setConversations(prev => prev.map(c =>
+            c.id === conversationID && !c.title
+              ? { ...c, title: titleFromMessageContent(titleContent), updated_at: new Date().toISOString() }
+              : c
+          ));
+        }
+        setStreamContent('');
+        setStreamReasoning('');
+        setStreamConversationId(null);
+        streamContextRef.current = null;
+        setIsStreaming(false);
+      };
+
+      if (isImageRequest) {
+        const lastUserMessage = requestMessages.filter(msg => msg.role === 'user').at(-1);
+        const userPrompt = lastUserMessage ? stripImageMarkdown(stripImageEditAnnotations(lastUserMessage.content)).trim() : '';
+        let finalShotPrompts = [userPrompt || 'Generate the requested image.'];
+        const planResponse = await chatCompletion(
+          IMAGE_PROMPT_PLANNER_PLATFORM,
+          {
+            model: IMAGE_PROMPT_PLANNER_MODEL,
+            messages: [
+              {
+                role: 'system',
+                content: [
+                  `Analyze the user's intent and convert the image-generation request into 1 to ${MAX_IMAGE_SHOTS} standalone image prompts.`,
+                  'Return only JSON with a shots array of strings.',
+                  'The number of strings in shots is the number of images to generate: one string means one image, multiple strings mean multiple separate images.',
+                  'Use one shot only when the user wants one final image/composite. Use multiple shots when the user wants multiple deliverables, separate scenes, separate assets, variants, product angles, lifestyle scenes, feature diagrams, packaging views, story frames, or a set/series of images.',
+                  'Do not merge separate requested images into one collage, grid, contact sheet, split-screen, infographic, poster, or multi-panel layout unless the user explicitly asks for a single combined image.',
+                  'Each shot must be a complete prompt for exactly one standalone image.',
+                ].join(' '),
+              },
+              { role: 'user', content: userPrompt || 'Generate the requested image.' },
+            ],
+            stream: false,
+            response_format: { type: 'json_object' },
+          },
+          abort.signal,
+        );
+        if (abort.signal.aborted) return;
+        const plannerContent = planResponse.choices?.[0]?.message?.content;
+        const shotPrompts = parseImageShotPlan(plannerContent);
+        finalShotPrompts = shotPrompts.length ? shotPrompts : finalShotPrompts;
+        console.info('[image-planner]', {
+          raw: plannerContent,
+          parsedCount: shotPrompts.length,
+          parsedShots: shotPrompts,
+          finalCount: finalShotPrompts.length,
+          finalShots: finalShotPrompts,
+        });
+        const planUsage = {
+          input_tokens: planResponse.usage?.prompt_tokens || planResponse.usage?.input_tokens || 0,
+          output_tokens: planResponse.usage?.completion_tokens || planResponse.usage?.output_tokens || 0,
+          model: planResponse.model || IMAGE_PROMPT_PLANNER_MODEL,
+          cost: planResponse.usage?.cost || 0,
+        };
+        const requests = finalShotPrompts.map(prompt => new Promise<{ input_tokens: number; output_tokens: number; model: string; cost: number }>((resolve, reject) => {
+          let localContent = '';
+          let appended = false;
+          const appendLocalContent = () => {
+            if (appended || !localContent.trim()) return;
+            accumulated = appendImageContent(accumulated, localContent);
+            setStreamContent(accumulated);
+            appended = true;
+          };
+
+          void chatCompletionsStream(
+            platform,
+            {
+              ...baseRequest,
+              messages: imageShotRequestMessages(requestMessages, prompt).map(msg => ({
+                role: msg.role,
+                content: toChatMessageContent(msg.role, msg.content),
+              })),
+              n: 1,
+            },
+            {
+              onData: (text) => {
+                localContent += text;
+                if (messageHasGeneratedImage(localContent)) appendLocalContent();
+              },
+              onReasoning: (text) => {
+                accumulatedReasoning += text;
+                setStreamReasoning(accumulatedReasoning);
+              },
+              onDone: (usage) => {
+                appendLocalContent();
+                resolve(usage);
+              },
+              onError: (err) => reject(new Error(err)),
+            },
+            abort.signal,
+          ).catch(reject);
+        }));
+
+        const results = await Promise.allSettled(requests);
+        if (abort.signal.aborted) return;
+        const fulfilledUsages = results.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
+        const failedCount = results.length - fulfilledUsages.length;
+        if (failedCount && !accumulated) {
+          const failure = results.find(result => result.status === 'rejected');
+          throw failure?.status === 'rejected' && failure.reason instanceof Error ? failure.reason : new Error('stream failed');
+        }
+        const usage = fulfilledUsages.reduce((total, item) => ({
+          input_tokens: total.input_tokens + item.input_tokens,
+          output_tokens: total.output_tokens + item.output_tokens,
+          model: item.model || total.model,
+          cost: total.cost + item.cost,
+        }), planUsage);
+        await finishAssistantResponse(usage);
+        if (failedCount && activeIdRef.current === conversationID) {
+          setError(`${failedCount} image${failedCount === 1 ? '' : 's'} failed to generate`);
+        }
+        return;
+      }
+
       await chatCompletionsStream(
         platform,
         {
-          model,
-          messages: requestMessages.map(msg => ({ role: msg.role, content: toChatMessageContent(msg.role, msg.content) })),
-          stream: true,
-          ...(isImageRequest && imageSize ? { size: imageSize } : {}),
-          ...(requestSupportsReasoning ? { reasoning_effort: requestReasoningEffort ?? reasoningEffort } : {}),
+          ...baseRequest,
         },
         {
           onData: (text) => {
@@ -1010,48 +1241,7 @@ export default function PlaygroundPage() {
             accumulatedReasoning += text;
             setStreamReasoning(accumulatedReasoning);
           },
-          onDone: async (usage) => {
-            if (!accumulated) {
-              if (activeIdRef.current === conversationID) {
-                setError(t('playground.no_response'));
-                setRetryRequest(nextRetryRequest);
-              }
-              setStreamContent('');
-              setStreamReasoning('');
-              setStreamConversationId(null);
-              streamContextRef.current = null;
-              setIsStreaming(false);
-              return;
-            }
-            const persisted = await api.persistMessage({
-              conversation_id: conversationID,
-              role: 'assistant',
-              content: accumulated,
-              reasoning: accumulatedReasoning,
-              platform,
-              model: usage.model || model,
-              group_id: groupID,
-              input_tokens: usage.input_tokens,
-              output_tokens: usage.output_tokens,
-              cost: usage.cost,
-            });
-            if (activeIdRef.current === conversationID) {
-              setMessages(prev => [...prev, persisted]);
-            }
-            setRetryRequest(null);
-            if (titleContent) {
-              setConversations(prev => prev.map(c =>
-                c.id === conversationID && !c.title
-                  ? { ...c, title: titleFromMessageContent(titleContent), updated_at: new Date().toISOString() }
-                  : c
-              ));
-            }
-            setStreamContent('');
-            setStreamReasoning('');
-            setStreamConversationId(null);
-            streamContextRef.current = null;
-            setIsStreaming(false);
-          },
+          onDone: finishAssistantResponse,
           onError: (err) => {
             if (activeIdRef.current === conversationID) {
               setError(err);
@@ -2894,18 +3084,25 @@ const styles: Record<string, React.CSSProperties> = {
   },
   imageGroup: {
     display: 'flex',
-    flexWrap: 'wrap',
+    flexWrap: 'nowrap',
     alignItems: 'flex-start',
     gap: 16,
+    maxWidth: '100%',
     margin: '10px 0 6px',
+    paddingBottom: 8,
+    overflowX: 'auto',
+    overflowY: 'hidden',
+    overscrollBehaviorX: 'contain',
+    scrollSnapType: 'x proximity',
   },
   generatedImageFrame: {
     display: 'inline-flex',
     flexDirection: 'column',
     alignItems: 'flex-start',
     gap: 8,
-    flex: '1 1 260px',
+    flex: '0 0 clamp(220px, 32vw, 420px)',
     maxWidth: 'min(100%, 420px)',
+    scrollSnapAlign: 'start',
   },
   generatedImagePreviewBtn: {
     display: 'block',
@@ -3146,7 +3343,10 @@ const styles: Record<string, React.CSSProperties> = {
     border: `1px solid ${cssVar('border')}`,
     borderRadius: cssVar('radiusMd'),
     background: cssVar('bgSurface'),
-    padding: '10px 12px 8px',
+    paddingTop: 10,
+    paddingRight: 12,
+    paddingBottom: 8,
+    paddingLeft: 12,
     transition: cssVar('transition'),
   },
   inputWrapperStreaming: {
