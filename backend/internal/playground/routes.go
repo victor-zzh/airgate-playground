@@ -1,8 +1,11 @@
 package playground
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,6 +30,7 @@ func (p *Plugin) RegisterRoutes(r sdk.RouteRegistrar) {
 	r.Handle(http.MethodGet, "/messages/", p.requireUser(p.handleListMessages))
 	r.Handle(http.MethodPost, "/messages", p.requireUser(p.handlePersistMessage))
 	r.Handle(http.MethodPost, "/chat/completions", p.requireUser(p.handleChatCompletions))
+	r.Handle(http.MethodPost, "/images/edits", p.requireUser(p.handleImageEdits))
 
 	// Metadata (platforms, models, user info)
 	r.Handle(http.MethodGet, "/platforms", p.requireUser(p.handleListPlatforms))
@@ -256,6 +260,63 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (p *Plugin) handleImageEdits(w http.ResponseWriter, r *http.Request) {
+	platform := strings.TrimSpace(r.Header.Get("X-Airgate-Platform"))
+	if platform == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "platform required")
+		return
+	}
+
+	contentType := r.Header.Get("Content-Type")
+	if !strings.HasPrefix(strings.ToLower(contentType), "multipart/") {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "multipart/form-data required")
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "invalid request body")
+		return
+	}
+	model := parseMultipartStringField(body, contentType, "model")
+	if model == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "model required")
+		return
+	}
+
+	headers := make(http.Header)
+	headers.Set("Content-Type", contentType)
+	headers.Set("Accept", "application/json")
+	headers.Set("X-Airgate-Platform", platform)
+
+	resp, err := p.host.Forward(r.Context(), sdk.HostForwardRequest{
+		UserID:  int64(parseUserID(r)),
+		GroupID: 0,
+		Model:   model,
+		Method:  http.MethodPost,
+		Path:    "/v1/images/edits",
+		Headers: headers,
+		Body:    body,
+		Stream:  false,
+	})
+	if err != nil {
+		p.logger.Warn("playground images edits forward failed", "error", err)
+		writeOpenAIError(w, http.StatusServiceUnavailable, "server_error", "upstream_error", "请求暂时无法完成，请稍后重试")
+		return
+	}
+
+	copyHeaders(w.Header(), resp.Headers)
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	status := resp.StatusCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(resp.Body)
+}
+
 // ── Metadata Handlers ──
 
 func (p *Plugin) handleListPlatforms(w http.ResponseWriter, r *http.Request) {
@@ -305,6 +366,27 @@ func parsePathID(path, prefix string) int64 {
 	seg := strings.TrimRight(path[idx+len(prefix):], "/")
 	id, _ := strconv.ParseInt(seg, 10, 64)
 	return id
+}
+
+func parseMultipartStringField(body []byte, contentType, field string) string {
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil || params["boundary"] == "" {
+		return ""
+	}
+	reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	for {
+		part, err := reader.NextPart()
+		if err != nil {
+			return ""
+		}
+		if part.FormName() != field {
+			_ = part.Close()
+			continue
+		}
+		data, _ := io.ReadAll(part)
+		_ = part.Close()
+		return strings.TrimSpace(string(data))
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

@@ -182,6 +182,23 @@ export interface ChatCompletionCallbacks {
   onError: (err: string) => void;
 }
 
+export interface ImageEditResponse {
+  created?: number;
+  model?: string;
+  data?: Array<{
+    url?: string;
+    b64_json?: string;
+    revised_prompt?: string;
+  }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+    cost?: number;
+  };
+}
+
 // ── API ──
 
 export const api = {
@@ -234,6 +251,39 @@ export const api = {
 
   getUserInfo: () => coreRequest<UserInfo>('GET', '/users/me'),
 };
+
+export async function editImage(platform: string, form: FormData, signal?: AbortSignal): Promise<ImageEditResponse> {
+  const resp = await fetch(`${BASE}/images/edits`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(),
+      'Accept': 'application/json',
+      'X-Airgate-Platform': platform,
+    },
+    body: form,
+    signal,
+  });
+
+  const text = await resp.text();
+  let parsed: unknown = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch { /* ignore */ }
+
+  if (!resp.ok) {
+    if (resp.status === 401) {
+      localStorage.removeItem('token');
+      window.location.href = '/login';
+    }
+    const errorPayload = parsed as { error?: { message?: string } | string; message?: string } | null;
+    const message = typeof errorPayload?.error === 'string'
+      ? errorPayload.error
+      : errorPayload?.error?.message || errorPayload?.message || `HTTP ${resp.status}`;
+    throw new Error(message);
+  }
+
+  return (parsed || {}) as ImageEditResponse;
+}
 
 export async function chatCompletionsStream(
   platform: string,

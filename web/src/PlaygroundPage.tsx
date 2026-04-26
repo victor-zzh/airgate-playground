@@ -1,8 +1,8 @@
 import { Children, cloneElement, isValidElement, useState, useEffect, useRef, useCallback, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cssVar } from '@airgate/theme';
-import { api, chatCompletionsStream } from './api';
-import type { ChatMessageContent, Conversation, Message, ModelInfo, PlatformInfo, ReasoningEffort, UserInfo } from './api';
+import { api, chatCompletionsStream, editImage as requestImageEdit } from './api';
+import type { ChatMessageContent, Conversation, ImageEditResponse, Message, ModelInfo, PlatformInfo, ReasoningEffort, UserInfo } from './api';
 
 declare global {
   interface Window {
@@ -17,10 +17,13 @@ const DRAFT_CONVERSATION_ID = -1;
 const IMAGE_MARKDOWN_RE = /!\[[^\]]*\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+)\)/g;
 const IMAGE_MARKDOWN_ITEM_RE = /!\[([^\]]*)\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+)\)/g;
 const IMAGE_MARKDOWN_TEST_RE = /!\[[^\]]*\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+)\)/;
+const IMAGE_EDIT_ANNOTATION_RE = /<!--airgate:image-edit:([A-Za-z0-9+/=]+)-->/g;
 const DATA_IMAGE_RE = /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i;
 const REASONING_MODEL_RE = /(^|[-_])(?:gpt-?5|o[134]|codex)(?:[-_.]|$)/i;
 const IMAGE_MODEL_RE = /(^|[-_])(?:gpt[-_]?image|image)(?:[-_.]|\d|$)/i;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MIN_SELECTION_SIZE = 8;
+const DEFAULT_MODEL_ID = 'gpt-5.5';
 const IMAGE_SIZE_ALIGNMENT = 16;
 const MAX_IMAGE_EDGE = 3840;
 const BASE_RESOLUTION_OPTIONS: Array<{ value: BaseResolution; label: string }> = [
@@ -39,7 +42,7 @@ const IMAGE_RATIO_OPTIONS: Array<{ value: ImageRatio; label: string }> = [
   { value: '21:9', label: '21:9' },
 ];
 const DEFAULT_IMAGE_SIZE_SETTINGS: ImageSizeSettings = {
-  mode: 'ratio',
+  mode: 'auto',
   baseResolution: 1024,
   ratio: '1:1',
 };
@@ -52,6 +55,9 @@ type ImageSizeSettings = {
   ratio: ImageRatio;
 };
 type PendingImage = { id: string; name: string; url: string };
+type EditImage = PendingImage & { file: File };
+type EditSelectionRect = { x: number; y: number; width: number; height: number };
+type ImageEditAnnotation = { imageIndex: number; rect: EditSelectionRect };
 type PreviewImage = { url: string; alt: string };
 type StreamAssistantOptions = {
   conversationID: number;
@@ -70,8 +76,29 @@ type MessageContentOptions = {
   onImagePreview?: (url: string, alt: string) => void;
   imagePreviewTitle?: string;
   generatedImageAlt?: string;
+  imageEditAnnotations?: ImageEditAnnotation[];
+  takeImageIndex?: () => number;
   trailingInlineAction?: ReactNode;
 };
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function selectionRectFromPoints(start: { x: number; y: number }, end: { x: number; y: number }): EditSelectionRect {
+  const x = Math.min(start.x, end.x);
+  const y = Math.min(start.y, end.y);
+  return {
+    x,
+    y,
+    width: Math.abs(end.x - start.x),
+    height: Math.abs(end.y - start.y),
+  };
+}
+
+function isUsableSelection(rect: EditSelectionRect | null) {
+  return Boolean(rect && rect.width >= MIN_SELECTION_SIZE && rect.height >= MIN_SELECTION_SIZE);
+}
 
 function cloneImageSizeSettings(settings: ImageSizeSettings): ImageSizeSettings {
   return { ...settings };
@@ -121,16 +148,47 @@ function imageSizeSummary(settings: ImageSizeSettings) {
   return resolveImageSize(settings) || 'Invalid size';
 }
 
+function stripImageEditAnnotations(content: string) {
+  return content.replace(IMAGE_EDIT_ANNOTATION_RE, '');
+}
+
 function stripImageMarkdown(content: string) {
-  return content.replace(IMAGE_MARKDOWN_RE, '[Image generated]').trim() || '[Image generated]';
+  return stripImageEditAnnotations(content).replace(IMAGE_MARKDOWN_RE, '[Image generated]').trim() || '[Image generated]';
 }
 
 function copyableMessageText(content: string) {
-  return content.replace(IMAGE_MARKDOWN_RE, '[Image]').trim() || '[Image]';
+  return stripImageEditAnnotations(content).replace(IMAGE_MARKDOWN_RE, '[Image]').trim() || '[Image]';
 }
 
 function messageHasGeneratedImage(content: string) {
   return IMAGE_MARKDOWN_TEST_RE.test(content);
+}
+
+function encodeImageEditAnnotation(annotation: ImageEditAnnotation) {
+  return `<!--airgate:image-edit:${btoa(encodeURIComponent(JSON.stringify(annotation)))}-->`;
+}
+
+function parseImageEditAnnotations(content: string): ImageEditAnnotation[] {
+  const annotations: ImageEditAnnotation[] = [];
+  let match: RegExpExecArray | null;
+  IMAGE_EDIT_ANNOTATION_RE.lastIndex = 0;
+
+  while ((match = IMAGE_EDIT_ANNOTATION_RE.exec(content)) !== null) {
+    try {
+      const value = JSON.parse(decodeURIComponent(atob(match[1])));
+      if (
+        value &&
+        Number.isInteger(value.imageIndex) &&
+        value.rect &&
+        [value.rect.x, value.rect.y, value.rect.width, value.rect.height].every(item => typeof item === 'number')
+      ) {
+        annotations.push(value as ImageEditAnnotation);
+      }
+    } catch { /* ignore malformed annotation */ }
+  }
+
+  IMAGE_EDIT_ANNOTATION_RE.lastIndex = 0;
+  return annotations;
 }
 
 function firstGeneratedImage(content: string): PreviewImage | null {
@@ -142,7 +200,7 @@ function firstGeneratedImage(content: string): PreviewImage | null {
 }
 
 function hasCopyableMessageText(content: string) {
-  return content.replace(IMAGE_MARKDOWN_RE, '').trim().length > 0;
+  return stripImageEditAnnotations(content).replace(IMAGE_MARKDOWN_RE, '').trim().length > 0;
 }
 
 function escapeMarkdownAlt(text: string) {
@@ -229,10 +287,32 @@ function fileToDataURL(file: File) {
   });
 }
 
-function messageContentWithImages(text: string, images: PendingImage[]) {
+function canvasToBlob(canvas: HTMLCanvasElement) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(blob => {
+      if (blob) {
+        resolve(blob);
+        return;
+      }
+      reject(new Error('Failed to create mask'));
+    }, 'image/png');
+  });
+}
+
+function loadImageElement(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Failed to load image'));
+    image.src = src;
+  });
+}
+
+function messageContentWithImages(text: string, images: PendingImage[], annotations: ImageEditAnnotation[] = []) {
   const body = text.trim();
   const imageMarkdown = images.map(image => `![${escapeMarkdownAlt(image.name)}](${image.url})`).join('\n');
-  return [body, imageMarkdown].filter(Boolean).join('\n\n');
+  const annotationMarkdown = annotations.map(encodeImageEditAnnotation).join('\n');
+  return [body, imageMarkdown, annotationMarkdown].filter(Boolean).join('\n\n');
 }
 
 async function imagesFromFiles(files: File[]) {
@@ -248,30 +328,69 @@ async function imagesFromFiles(files: File[]) {
   })));
 }
 
+async function editImageFromFile(file: File): Promise<EditImage> {
+  if (!file.type.startsWith('image/')) {
+    throw new Error('Select an image file');
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    throw new Error('Images must be 10MB or smaller');
+  }
+  return {
+    id: `${file.name}-${file.lastModified}-${file.size}`,
+    name: file.name || 'source-image',
+    url: await fileToDataURL(file),
+    file,
+  };
+}
+
+function generatedImageUrlFromEdit(response: ImageEditResponse) {
+  const image = response.data?.[0];
+  if (!image) return '';
+  if (image.url) return image.url;
+  if (image.b64_json) return `data:image/png;base64,${image.b64_json}`;
+  return '';
+}
+
+function imageEditAssistantContent(response: ImageEditResponse, fallbackAlt: string) {
+  const url = generatedImageUrlFromEdit(response);
+  if (!url) return '';
+  const revisedPrompt = response.data?.[0]?.revised_prompt?.trim();
+  return [revisedPrompt, `![${escapeMarkdownAlt(fallbackAlt)}](${url})`].filter(Boolean).join('\n\n');
+}
+
+function imageEditUsage(response: ImageEditResponse) {
+  return {
+    input_tokens: response.usage?.prompt_tokens || response.usage?.input_tokens || 0,
+    output_tokens: response.usage?.completion_tokens || response.usage?.output_tokens || 0,
+    cost: response.usage?.cost || 0,
+  };
+}
+
 function titleFromMessageContent(content: string) {
-  const title = content.replace(IMAGE_MARKDOWN_RE, '[Image]').trim() || '[Image]';
+  const title = stripImageEditAnnotations(content).replace(IMAGE_MARKDOWN_RE, '[Image]').trim() || '[Image]';
   return title.slice(0, 30) + (title.length > 30 ? '...' : '');
 }
 
 function toChatMessageContent(role: string, content: string): ChatMessageContent {
-  if (role !== 'user') return stripImageMarkdown(content);
+  const cleanContent = stripImageEditAnnotations(content);
+  if (role !== 'user') return stripImageMarkdown(cleanContent);
 
   const parts: Exclude<ChatMessageContent, string> = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   IMAGE_MARKDOWN_RE.lastIndex = 0;
 
-  while ((match = IMAGE_MARKDOWN_RE.exec(content)) !== null) {
-    const text = content.slice(lastIndex, match.index).trim();
+  while ((match = IMAGE_MARKDOWN_RE.exec(cleanContent)) !== null) {
+    const text = cleanContent.slice(lastIndex, match.index).trim();
     if (text) parts.push({ type: 'text', text });
     parts.push({ type: 'image_url', image_url: { url: match[1] } });
     lastIndex = match.index + match[0].length;
   }
 
-  const tail = content.slice(lastIndex).trim();
+  const tail = cleanContent.slice(lastIndex).trim();
   if (tail) parts.push({ type: 'text', text: tail });
 
-  return parts.length ? parts : content;
+  return parts.length ? parts : cleanContent;
 }
 
 function isImageModelIdentifier(id?: string, name?: string) {
@@ -293,6 +412,16 @@ function supportsReasoning(model?: ModelInfo) {
 
 function modelOptionValue(model: ModelInfo) {
   return `${encodeURIComponent(model.platform || '')}:${encodeURIComponent(model.id)}`;
+}
+
+function normalizeModelName(value?: string) {
+  return (value || '').toLowerCase().replace(/[-_\s]/g, '');
+}
+
+function defaultModelOptionValue(models: ModelInfo[]) {
+  const target = normalizeModelName(DEFAULT_MODEL_ID);
+  const preferred = models.find(model => normalizeModelName(model.id) === target || normalizeModelName(model.name) === target);
+  return preferred ? modelOptionValue(preferred) : (models[0] ? modelOptionValue(models[0]) : '');
 }
 
 function platformDisplayName(platforms: PlatformInfo[], name?: string) {
@@ -320,7 +449,24 @@ function pushTextWithBreaks(nodes: ReactNode[], text: string, keyPrefix: string)
 }
 
 function renderGeneratedImage(key: string, url: string, alt: string, options: MessageContentOptions) {
+  const imageIndex = options.takeImageIndex?.() ?? -1;
+  const annotation = options.imageEditAnnotations?.find(item => item.imageIndex === imageIndex);
   const image = <img src={url} alt={alt} style={styles.generatedImage} loading="lazy" />;
+  const annotatedImage = annotation ? (
+    <span style={styles.generatedImageOverlayWrap}>
+      {image}
+      <span style={styles.generatedImageDimOverlay} />
+      <span
+        style={{
+          ...styles.generatedImageSelection,
+          left: `${annotation.rect.x * 100}%`,
+          top: `${annotation.rect.y * 100}%`,
+          width: `${annotation.rect.width * 100}%`,
+          height: `${annotation.rect.height * 100}%`,
+        }}
+      />
+    </span>
+  ) : image;
   const previewTitle = options.imagePreviewTitle || 'Preview image';
   const previewableImage = options.onImagePreview ? (
     <button
@@ -330,9 +476,9 @@ function renderGeneratedImage(key: string, url: string, alt: string, options: Me
       aria-label={previewTitle}
       onClick={() => options.onImagePreview?.(url, alt)}
     >
-      {image}
+      {annotatedImage}
     </button>
-  ) : image;
+  ) : annotatedImage;
 
   return (
     <span key={key} style={styles.generatedImageFrame}>
@@ -456,7 +602,17 @@ function appendTrailingInlineAction(nodes: ReactNode[], action?: ReactNode) {
 }
 
 function renderMessageContent(content: string, options: MessageContentOptions = {}) {
-  const lines = content.replace(/\r\n?/g, '\n').split('\n');
+  const cleanContent = stripImageEditAnnotations(content);
+  let imageIndex = -1;
+  const renderOptions: MessageContentOptions = {
+    ...options,
+    imageEditAnnotations: options.imageEditAnnotations || parseImageEditAnnotations(content),
+    takeImageIndex: () => {
+      imageIndex += 1;
+      return imageIndex;
+    },
+  };
+  const lines = cleanContent.replace(/\r\n?/g, '\n').split('\n');
   const nodes: ReactNode[] = [];
   let paragraph: string[] = [];
   let quote: string[] = [];
@@ -470,20 +626,20 @@ function renderMessageContent(content: string, options: MessageContentOptions = 
     if (!paragraph.length) return;
     const key = nextKey('p');
     const text = paragraph.join('\n');
-    nodes.push(renderImageGroup(text, key, options) || <p key={key} style={styles.markdownParagraph}>{renderInlineMarkdown(text, key, options)}</p>);
+    nodes.push(renderImageGroup(text, key, renderOptions) || <p key={key} style={styles.markdownParagraph}>{renderInlineMarkdown(text, key, renderOptions)}</p>);
     paragraph = [];
   };
   const flushQuote = () => {
     if (!quote.length) return;
     const key = nextKey('quote');
-    nodes.push(<blockquote key={key} style={styles.markdownBlockquote}>{renderInlineMarkdown(quote.join('\n'), key, options)}</blockquote>);
+    nodes.push(<blockquote key={key} style={styles.markdownBlockquote}>{renderInlineMarkdown(quote.join('\n'), key, renderOptions)}</blockquote>);
     quote = [];
   };
   const flushList = () => {
     if (!listItems.length) return;
     const key = nextKey('list');
     const children = listItems.map((item, index) => (
-      <li key={`${key}-${index}`} style={styles.markdownListItem}>{renderInlineMarkdown(item.text, `${key}-${index}`, options)}</li>
+      <li key={`${key}-${index}`} style={styles.markdownListItem}>{renderInlineMarkdown(item.text, `${key}-${index}`, renderOptions)}</li>
     ));
     nodes.push(listItems[0].ordered ? <ol key={key} style={styles.markdownList}>{children}</ol> : <ul key={key} style={styles.markdownList}>{children}</ul>);
     listItems = [];
@@ -525,7 +681,7 @@ function renderMessageContent(content: string, options: MessageContentOptions = 
     const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
       flushBlocks();
-      nodes.push(renderHeading(Math.min(headingMatch[1].length, 4), headingMatch[2].trim(), nextKey('heading'), options));
+      nodes.push(renderHeading(Math.min(headingMatch[1].length, 4), headingMatch[2].trim(), nextKey('heading'), renderOptions));
       continue;
     }
 
@@ -563,7 +719,7 @@ function renderMessageContent(content: string, options: MessageContentOptions = 
   flushBlocks();
 
   const renderedNodes = appendTrailingInlineAction(nodes, options.trailingInlineAction);
-  return renderedNodes.length > 0 ? renderedNodes : content;
+  return renderedNodes.length > 0 ? renderedNodes : cleanContent;
 }
 
 export default function PlaygroundPage() {
@@ -578,6 +734,12 @@ export default function PlaygroundPage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [editSource, setEditSource] = useState<EditImage | null>(null);
+  const [isEditPanelOpen, setIsEditPanelOpen] = useState(false);
+  const [isEditingImage, setIsEditingImage] = useState(false);
+  const [editSelection, setEditSelection] = useState<EditSelectionRect | null>(null);
+  const [draftEditSelection, setDraftEditSelection] = useState<EditSelectionRect | null>(null);
+  const [editStageSize, setEditStageSize] = useState<{ width: number; height: number } | null>(null);
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
 
   const [platforms, setPlatforms] = useState<PlatformInfo[]>([]);
@@ -599,6 +761,10 @@ export default function PlaygroundPage() {
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const editFileInputRef = useRef<HTMLInputElement>(null);
+  const editCanvasRef = useRef<HTMLCanvasElement>(null);
+  const editCanvasContainerRef = useRef<HTMLDivElement>(null);
+  const selectionStartRef = useRef<{ x: number; y: number } | null>(null);
   const activeIdRef = useRef<number | null>(null);
   const streamContextRef = useRef<{ conversationId: number; model: string } | null>(null);
   const skipNextMessagesLoadRef = useRef<number | null>(null);
@@ -615,7 +781,7 @@ export default function PlaygroundPage() {
       const nextModels = modelLists.flat();
       setModels(nextModels);
       setSelectedModel(current => (
-        nextModels.some(item => modelOptionValue(item) === current) ? current : (nextModels[0] ? modelOptionValue(nextModels[0]) : '')
+        nextModels.some(item => modelOptionValue(item) === current) ? current : defaultModelOptionValue(nextModels)
       ));
     }).catch(e => {
       if (cancelled) return;
@@ -673,6 +839,52 @@ export default function PlaygroundPage() {
     return () => window.clearTimeout(timer);
   }, [interactionNotice]);
 
+  useEffect(() => {
+    if (!editSource || !isEditPanelOpen) return;
+    let cancelled = false;
+
+    const syncCanvas = async () => {
+      const canvas = editCanvasRef.current;
+      const container = editCanvasContainerRef.current;
+      if (!canvas || !container) return;
+
+      const image = await loadImageElement(editSource.url);
+      if (cancelled) return;
+
+      const maxWidth = container.clientWidth || image.naturalWidth;
+      const maxHeight = isMobile ? 220 : 260;
+      const scale = Math.min(1, maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
+      const width = Math.max(1, Math.round(image.naturalWidth * scale));
+      const height = Math.max(1, Math.round(image.naturalHeight * scale));
+      canvas.width = width;
+      canvas.height = height;
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      setEditStageSize({ width, height });
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.clearRect(0, 0, width, height);
+      setEditSelection(null);
+      setDraftEditSelection(null);
+      selectionStartRef.current = null;
+    };
+
+    void syncCanvas().catch(err => setError(err instanceof Error ? err.message : 'Failed to load image'));
+    if (typeof ResizeObserver === 'undefined') {
+      return () => { cancelled = true; };
+    }
+
+    const observer = new ResizeObserver(() => {
+      void syncCanvas().catch(err => setError(err instanceof Error ? err.message : 'Failed to load image'));
+    });
+    if (editCanvasContainerRef.current) observer.observe(editCanvasContainerRef.current);
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+    };
+  }, [editSource, isEditPanelOpen, isMobile]);
+
   const resolveGroupID = useCallback(() => 0, []);
 
   const updateImageSizeSettings = useCallback((patch: Partial<ImageSizeSettings>) => {
@@ -705,6 +917,11 @@ export default function PlaygroundPage() {
     setActiveId(DRAFT_CONVERSATION_ID);
     setMessages([]);
     setPendingImages([]);
+    setEditSource(null);
+    setIsEditPanelOpen(false);
+    setEditSelection(null);
+    setDraftEditSelection(null);
+    setEditStageSize(null);
     setError('');
     setRetryRequest(null);
     if (isMobile) {
@@ -969,10 +1186,275 @@ export default function PlaygroundPage() {
     }
   }, []);
 
+  const selectEditImage = useCallback(async (file?: File) => {
+    if (!file) return;
+    try {
+      const nextSource = await editImageFromFile(file);
+      setEditSource(nextSource);
+      setIsEditPanelOpen(true);
+      setEditSelection(null);
+      setDraftEditSelection(null);
+      setEditStageSize(null);
+      setError('');
+      setRetryRequest(null);
+    } catch (err) {
+      setRetryRequest(null);
+      setError(err instanceof Error ? err.message : 'Failed to read image');
+    }
+  }, []);
+
   const handleImageChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     await addImageFiles(Array.from(e.target.files || []));
     e.target.value = '';
   }, [addImageFiles]);
+
+  const handleEditImageChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    await selectEditImage(e.target.files?.[0]);
+    e.target.value = '';
+  }, [selectEditImage]);
+
+  const triggerEditImagePicker = useCallback(() => {
+    editFileInputRef.current?.click();
+  }, []);
+
+  const clearEditSelection = useCallback(() => {
+    setEditSelection(null);
+    setDraftEditSelection(null);
+    selectionStartRef.current = null;
+  }, []);
+
+  const closeEditPanel = useCallback(() => {
+    setIsEditPanelOpen(false);
+    setEditSource(null);
+    setEditSelection(null);
+    setDraftEditSelection(null);
+    setEditStageSize(null);
+    selectionStartRef.current = null;
+  }, []);
+
+  const selectionPointFromEvent = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = editCanvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: clampNumber((event.clientX - rect.left) * scaleX, 0, canvas.width),
+      y: clampNumber((event.clientY - rect.top) * scaleY, 0, canvas.height),
+    };
+  }, []);
+
+  const handleSelectionPointerDown = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    event.preventDefault();
+    const point = selectionPointFromEvent(event);
+    if (!point) return;
+    selectionStartRef.current = point;
+    setEditSelection(null);
+    setDraftEditSelection({ x: point.x, y: point.y, width: 0, height: 0 });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, [selectionPointFromEvent]);
+
+  const handleSelectionPointerMove = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    const start = selectionStartRef.current;
+    if (!start) return;
+    event.preventDefault();
+    const point = selectionPointFromEvent(event);
+    if (point) setDraftEditSelection(selectionRectFromPoints(start, point));
+  }, [selectionPointFromEvent]);
+
+  const finishSelectionDrag = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    const start = selectionStartRef.current;
+    const point = selectionPointFromEvent(event);
+    const selection = start && point ? selectionRectFromPoints(start, point) : draftEditSelection;
+    selectionStartRef.current = null;
+    setDraftEditSelection(null);
+    setEditSelection(isUsableSelection(selection) ? selection : null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, [draftEditSelection, selectionPointFromEvent]);
+
+  const createEditMaskBlob = useCallback(async () => {
+    const canvas = editCanvasRef.current;
+    if (!canvas || !editSource || !editSelection) throw new Error('Selection required');
+
+    const image = await loadImageElement(editSource.url);
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = image.naturalWidth;
+    maskCanvas.height = image.naturalHeight;
+    const ctx = maskCanvas.getContext('2d');
+    if (!ctx) throw new Error('Failed to create mask');
+
+    const scaleX = image.naturalWidth / canvas.width;
+    const scaleY = image.naturalHeight / canvas.height;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+    ctx.clearRect(
+      Math.floor(editSelection.x * scaleX),
+      Math.floor(editSelection.y * scaleY),
+      Math.ceil(editSelection.width * scaleX),
+      Math.ceil(editSelection.height * scaleY),
+    );
+    return canvasToBlob(maskCanvas);
+  }, [editSelection, editSource]);
+
+  const submitImageEdit = useCallback(async () => {
+    if (!activeId || isStreaming || isEditingImage) return;
+    if (!selectedPlatform || !selectedModelID) {
+      setRetryRequest(null);
+      setError(t('playground.select_model_first'));
+      return;
+    }
+    if (!selectedModelIsImage) {
+      setRetryRequest(null);
+      setError(t('playground.select_image_model_first'));
+      return;
+    }
+    if (!editSource) {
+      setRetryRequest(null);
+      setError(t('playground.choose_source_image_first'));
+      return;
+    }
+    if (!editSelection) {
+      setRetryRequest(null);
+      setError(t('playground.select_edit_area_first'));
+      return;
+    }
+
+    const prompt = input.trim();
+    if (!prompt) {
+      setRetryRequest(null);
+      setError(t('playground.describe_image_change_first'));
+      return;
+    }
+
+    const groupID = resolveGroupID();
+    let conversationID = activeId;
+    const canvas = editCanvasRef.current;
+    const editAnnotation = canvas ? {
+      imageIndex: 0,
+      rect: {
+        x: editSelection.x / canvas.width,
+        y: editSelection.y / canvas.height,
+        width: editSelection.width / canvas.width,
+        height: editSelection.height / canvas.height,
+      },
+    } : null;
+    const userContent = messageContentWithImages(prompt, [editSource], editAnnotation ? [editAnnotation] : []);
+    const localUserMessage: Message = {
+      id: Date.now(),
+      conversation_id: activeId,
+      role: 'user',
+      content: userContent,
+      platform: selectedPlatform,
+      model: selectedModelID,
+      group_id: groupID,
+      input_tokens: 0,
+      output_tokens: 0,
+      cost: 0,
+      created_at: new Date().toISOString(),
+    };
+
+    setInput('');
+    if (inputRef.current) inputRef.current.style.height = '24px';
+    setError('');
+    setRetryRequest(null);
+    setMessages(prev => [...prev, localUserMessage]);
+    setIsStreaming(true);
+    setIsEditingImage(true);
+    setStreamConversationId(conversationID);
+    streamContextRef.current = { conversationId: conversationID, model: selectedModelID };
+    setStreamContent('');
+    setStreamReasoning('');
+
+    try {
+      if (conversationID === DRAFT_CONVERSATION_ID) {
+        const conv = await api.createConversation({
+          title: '',
+          group_id: groupID,
+          platform: selectedPlatform,
+          model: selectedModelID,
+        });
+        conversationID = conv.id;
+        if (activeIdRef.current === DRAFT_CONVERSATION_ID) {
+          activeIdRef.current = conv.id;
+          skipNextMessagesLoadRef.current = conv.id;
+          setActiveId(conv.id);
+          setMessages(prev => prev.map(msg => ({ ...msg, conversation_id: conv.id })));
+        }
+        setStreamConversationId(conv.id);
+        streamContextRef.current = { conversationId: conv.id, model: selectedModelID };
+        setConversations(prev => [conv, ...prev.filter(c => c.id !== DRAFT_CONVERSATION_ID)]);
+      }
+
+      const persistedUser = await api.persistMessage({
+        conversation_id: conversationID,
+        role: 'user',
+        content: userContent,
+        platform: selectedPlatform,
+        model: selectedModelID,
+        group_id: groupID,
+      });
+      if (activeIdRef.current === conversationID) {
+        setMessages(prev => prev.map(msg => (msg.id === localUserMessage.id ? persistedUser : msg)));
+      }
+
+      const abort = new AbortController();
+      abortRef.current = abort;
+      const maskBlob = await createEditMaskBlob();
+      if (abort.signal.aborted) return;
+
+      const form = new FormData();
+      form.append('model', selectedModelID);
+      form.append('prompt', prompt);
+      form.append('image', editSource.file, editSource.name || 'image.png');
+      form.append('mask', maskBlob, 'mask.png');
+      if (resolvedImageSize) form.append('size', resolvedImageSize);
+
+      const response = await requestImageEdit(selectedPlatform, form, abort.signal);
+      if (abort.signal.aborted) return;
+      const assistantContent = imageEditAssistantContent(response, 'edited-image');
+      if (!assistantContent) throw new Error('No image returned');
+      const usage = imageEditUsage(response);
+      const persistedAssistant = await api.persistMessage({
+        conversation_id: conversationID,
+        role: 'assistant',
+        content: assistantContent,
+        platform: selectedPlatform,
+        model: response.model || selectedModelID,
+        group_id: groupID,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cost: usage.cost,
+      });
+
+      if (activeIdRef.current === conversationID) {
+        setMessages(prev => [...prev, persistedAssistant]);
+      }
+      setConversations(prev => prev.map(c =>
+        c.id === conversationID && !c.title
+          ? { ...c, title: titleFromMessageContent(userContent), updated_at: new Date().toISOString() }
+          : c
+      ));
+      setEditSource(null);
+      setIsEditPanelOpen(false);
+      setEditSelection(null);
+      setDraftEditSelection(null);
+      setEditStageSize(null);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      if (activeIdRef.current === conversationID) {
+        setError(e instanceof Error ? e.message : 'image edit failed');
+      }
+    } finally {
+      setIsStreaming(false);
+      setIsEditingImage(false);
+      setStreamContent('');
+      setStreamReasoning('');
+      setStreamConversationId(null);
+      streamContextRef.current = null;
+    }
+  }, [activeId, createEditMaskBlob, editSelection, editSource, input, isEditingImage, isStreaming, resolveGroupID, resolvedImageSize, selectedModelID, selectedModelIsImage, selectedPlatform, t]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(e.clipboardData.items)
@@ -1011,26 +1493,33 @@ export default function PlaygroundPage() {
     setStreamReasoning('');
     setStreamConversationId(null);
     streamContextRef.current = null;
+    setIsEditingImage(false);
     setIsStreaming(false);
   }, [streamContent, streamReasoning]);
 
   const activeConv = conversations.find(c => c.id === activeId);
   const lastMessage = messages[messages.length - 1];
+  const visibleEditSelection = draftEditSelection || editSelection;
+  const isImageEditReady = Boolean(isEditPanelOpen && editSource && editSelection && input.trim() && selectedPlatform && selectedModelID && selectedModelIsImage);
   const hasRecoverableUserMessage = Boolean(activeId && activeId !== DRAFT_CONVERSATION_ID && lastMessage?.role === 'user' && !error && !isStreaming);
   const isActiveConversationStreaming = isStreaming && streamConversationId === activeId;
-  const canSendMessage = Boolean(input.trim() || pendingImages.length > 0) && Boolean(selectedPlatform && selectedModelID) && !isStreaming;
+  const canSendMessage = Boolean((isEditPanelOpen ? isImageEditReady : (input.trim() || pendingImages.length > 0)) && selectedPlatform && selectedModelID) && !isStreaming && !isEditingImage;
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (!selectedPlatform || !selectedModelID) {
         setRetryRequest(null);
-        setError('Select a model first');
+        setError(t('playground.select_model_first'));
+        return;
+      }
+      if (isEditPanelOpen) {
+        void submitImageEdit();
         return;
       }
       sendMessage();
     }
-  }, [selectedModelID, selectedPlatform, sendMessage]);
+  }, [isEditPanelOpen, selectedModelID, selectedPlatform, sendMessage, submitImageEdit, t]);
 
   const triggerImagePicker = useCallback(() => {
     fileInputRef.current?.click();
@@ -1626,6 +2115,90 @@ export default function PlaygroundPage() {
         {activeId && (
           <div style={{ ...styles.inputArea, ...(isMobile ? styles.inputAreaMobile : null) }}>
             <div style={{ ...styles.inputWrapper, ...(isActiveConversationStreaming ? styles.inputWrapperStreaming : null) }}>
+              {selectedModelIsImage && isEditPanelOpen && (
+                <div style={{ ...styles.imageEditPanel, ...(isMobile ? styles.imageEditPanelMobile : null) }}>
+                  <div style={{ ...styles.imageEditHeader, ...(isMobile ? styles.imageEditHeaderMobile : null) }}>
+                    <div style={styles.imageEditTitleWrap}>
+                      <span style={styles.imageEditTitle}>{t('playground.edit_image_region')}</span>
+                      <span style={styles.imageEditSubtitle}>{editSource ? t('playground.edit_image_region_hint') : t('playground.choose_source_image_region_hint')}</span>
+                    </div>
+                    <div style={styles.imageEditHeaderActions}>
+                      <button
+                        type="button"
+                        style={styles.imageEditGhostBtn}
+                        onClick={triggerEditImagePicker}
+                        disabled={isActiveConversationStreaming}
+                      >
+                        {editSource ? t('playground.replace_source') : t('playground.choose_source')}
+                      </button>
+                      <button
+                        type="button"
+                        style={styles.imageEditIconBtn}
+                        onClick={closeEditPanel}
+                        disabled={isActiveConversationStreaming}
+                        aria-label="Close image editor"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+
+                  {editSource ? (
+                    <div style={{ ...styles.imageEditBody, ...(isMobile ? styles.imageEditBodyMobile : null) }}>
+                      <div ref={editCanvasContainerRef} style={styles.imageEditStageWrap}>
+                        <div style={{
+                          ...styles.imageEditStage,
+                          ...(editStageSize ? { width: editStageSize.width, height: editStageSize.height } : null),
+                        }}>
+                          <img src={editSource.url} alt={editSource.name} style={styles.imageEditSource} draggable={false} />
+                          {visibleEditSelection && (
+                            <div
+                              style={{
+                                ...styles.imageEditSelection,
+                                left: visibleEditSelection.x,
+                                top: visibleEditSelection.y,
+                                width: visibleEditSelection.width,
+                                height: visibleEditSelection.height,
+                              }}
+                            />
+                          )}
+                          <canvas
+                            ref={editCanvasRef}
+                            style={styles.imageEditCanvas}
+                            onPointerDown={handleSelectionPointerDown}
+                            onPointerMove={handleSelectionPointerMove}
+                            onPointerUp={finishSelectionDrag}
+                            onPointerCancel={finishSelectionDrag}
+                            aria-label="Box-select image edit region"
+                          />
+                        </div>
+                      </div>
+                      <div style={styles.imageEditSidePanel}>
+                        <div style={styles.imageEditBadge}>{editSelection ? t('playground.region_selected') : t('playground.drag_to_select')}</div>
+                        <div style={styles.imageEditFilename}>{editSource.name}</div>
+                        <button
+                          type="button"
+                          style={{ ...styles.imageEditGhostBtn, opacity: editSelection ? 1 : 0.5 }}
+                          onClick={clearEditSelection}
+                          disabled={!editSelection || isActiveConversationStreaming}
+                        >
+                          {t('playground.clear_selection')}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      style={styles.imageEditEmptyBtn}
+                      onClick={triggerEditImagePicker}
+                      disabled={isActiveConversationStreaming}
+                    >
+                      {t('playground.choose_source_image_for_regional_editing')}
+                    </button>
+                  )}
+                </div>
+              )}
+
               {pendingImages.length > 0 && (
                 <div style={styles.imagePreviewList}>
                   {pendingImages.map(image => (
@@ -1666,22 +2239,55 @@ export default function PlaygroundPage() {
                 onChange={handleImageChange}
                 disabled={isActiveConversationStreaming}
               />
+              <input
+                ref={editFileInputRef}
+                type="file"
+                accept="image/*"
+                style={styles.fileInput}
+                onChange={handleEditImageChange}
+                disabled={isActiveConversationStreaming}
+              />
               <div style={{ ...styles.inputActions, ...(isMobile ? styles.inputActionsMobile : null) }}>
                 <span style={{ ...styles.inputHint, ...(isMobile ? styles.inputHintMobile : null) }}>{t('playground.input_hint')}</span>
                 <div style={{ ...styles.inputButtonGroup, ...(isMobile ? styles.inputButtonGroupMobile : null) }}>
+                  {selectedModelIsImage && (
+                    <button
+                      type="button"
+                      style={{
+                        ...styles.attachBtn,
+                        ...(isEditPanelOpen ? styles.attachBtnActive : null),
+                        ...(isMobile ? styles.actionBtnMobile : null),
+                      }}
+                      onClick={() => {
+                        if (editSource) {
+                          setIsEditPanelOpen(current => !current);
+                          return;
+                        }
+                        triggerEditImagePicker();
+                      }}
+                      disabled={isActiveConversationStreaming}
+                      title={t('playground.edit_image_region')}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 20h9" />
+                        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                      </svg>
+                      {t('playground.edit')}
+                    </button>
+                  )}
                   <button
                     type="button"
                     style={{ ...styles.attachBtn, ...(isMobile ? styles.actionBtnMobile : null) }}
                     onClick={triggerImagePicker}
-                    disabled={isActiveConversationStreaming}
-                    title="Attach images"
+                    disabled={isActiveConversationStreaming || isEditPanelOpen}
+                    title={t('playground.attach_images')}
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="3" y="3" width="18" height="18" rx="2" />
                       <circle cx="8.5" cy="8.5" r="1.5" />
                       <path d="M21 15l-5-5L5 21" />
                     </svg>
-                    Image
+                    {t('playground.image')}
                   </button>
                   {isActiveConversationStreaming ? (
                     <button style={{ ...styles.stopBtn, ...(isMobile ? styles.actionBtnMobile : null) }} onClick={stopStreaming}>
@@ -1697,9 +2303,15 @@ export default function PlaygroundPage() {
                         ...(isMobile ? styles.actionBtnMobile : null),
                         opacity: canSendMessage ? 1 : 0.4,
                       }}
-                      onClick={sendMessage}
+                      onClick={() => {
+                        if (isEditPanelOpen) {
+                          void submitImageEdit();
+                          return;
+                        }
+                        sendMessage();
+                      }}
                       disabled={!canSendMessage}
-                      title={selectedPlatform && selectedModelID ? undefined : 'Select a model first'}
+                      title={selectedPlatform && selectedModelID ? undefined : t('playground.select_model_first')}
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M22 2L11 13" />
@@ -2305,6 +2917,13 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'left',
     font: 'inherit',
   },
+  generatedImageOverlayWrap: {
+    position: 'relative',
+    display: 'block',
+    width: '100%',
+    borderRadius: cssVar('radiusMd'),
+    overflow: 'hidden',
+  },
   generatedImage: {
     display: 'block',
     maxHeight: 420,
@@ -2313,6 +2932,20 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: cssVar('radiusMd'),
     border: `1px solid ${cssVar('borderSubtle')}`,
     objectFit: 'contain',
+  },
+  generatedImageDimOverlay: {
+    position: 'absolute',
+    inset: 0,
+    borderRadius: cssVar('radiusMd'),
+    background: 'rgba(15, 23, 42, 0.34)',
+    pointerEvents: 'none',
+  },
+  generatedImageSelection: {
+    position: 'absolute',
+    border: `2px solid ${cssVar('primary')}`,
+    background: 'rgba(45, 212, 191, 0.2)',
+    boxShadow: '0 0 0 9999px rgba(3, 7, 18, 0.18), 0 0 18px rgba(45, 212, 191, 0.35)',
+    pointerEvents: 'none',
   },
   imageDownloadBtn: {
     display: 'inline-flex',
@@ -2520,6 +3153,166 @@ const styles: Record<string, React.CSSProperties> = {
     paddingTop: 8,
     paddingBottom: 8,
   },
+  imageEditPanel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+    padding: 12,
+    borderRadius: cssVar('radiusMd'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    background: 'linear-gradient(180deg, rgba(19, 28, 43, 0.72), rgba(10, 15, 26, 0.72))',
+    boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.035)',
+  },
+  imageEditPanelMobile: {
+    padding: 10,
+  },
+  imageEditHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  imageEditHeaderMobile: {
+    flexDirection: 'column',
+  },
+  imageEditTitleWrap: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 3,
+    minWidth: 0,
+  },
+  imageEditTitle: {
+    fontSize: 13,
+    fontWeight: 700,
+    color: '#edf4ff',
+  },
+  imageEditSubtitle: {
+    fontSize: 12,
+    color: cssVar('textTertiary'),
+  },
+  imageEditHeaderActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+  },
+  imageEditGhostBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 30,
+    padding: '6px 10px',
+    borderRadius: cssVar('radiusSm'),
+    border: `1px solid ${cssVar('border')}`,
+    background: 'rgba(9, 14, 24, 0.5)',
+    color: cssVar('textSecondary'),
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: 'pointer',
+    transition: cssVar('transition'),
+    fontFamily: cssVar('fontSans'),
+  },
+  imageEditIconBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 30,
+    height: 30,
+    borderRadius: '999px',
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    background: 'rgba(9, 14, 24, 0.52)',
+    color: cssVar('textSecondary'),
+    fontSize: 18,
+    lineHeight: 1,
+    cursor: 'pointer',
+  },
+  imageEditBody: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) 150px',
+    gap: 12,
+    alignItems: 'stretch',
+  },
+  imageEditBodyMobile: {
+    gridTemplateColumns: '1fr',
+  },
+  imageEditStageWrap: {
+    minWidth: 0,
+    overflow: 'auto',
+    borderRadius: cssVar('radiusMd'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    background: 'rgba(2, 6, 14, 0.44)',
+    padding: 8,
+  },
+  imageEditStage: {
+    position: 'relative',
+    display: 'inline-flex',
+    maxWidth: '100%',
+    borderRadius: cssVar('radiusSm'),
+    overflow: 'hidden',
+    verticalAlign: 'top',
+  },
+  imageEditSource: {
+    display: 'block',
+    width: '100%',
+    height: '100%',
+    objectFit: 'contain',
+    userSelect: 'none',
+  },
+  imageEditCanvas: {
+    position: 'absolute',
+    inset: 0,
+    width: '100%',
+    height: '100%',
+    touchAction: 'none',
+    cursor: 'crosshair',
+  },
+  imageEditSelection: {
+    position: 'absolute',
+    zIndex: 1,
+    border: '2px solid rgba(45, 212, 191, 0.95)',
+    background: 'rgba(45, 212, 191, 0.2)',
+    boxShadow: '0 0 0 9999px rgba(2, 6, 14, 0.28), 0 0 18px rgba(45, 212, 191, 0.35)',
+    pointerEvents: 'none',
+  },
+  imageEditSidePanel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    justifyContent: 'space-between',
+    minWidth: 0,
+    padding: 10,
+    borderRadius: cssVar('radiusSm'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    background: 'rgba(5, 10, 18, 0.38)',
+  },
+  imageEditBadge: {
+    display: 'inline-flex',
+    width: 'fit-content',
+    padding: '4px 8px',
+    borderRadius: '999px',
+    background: cssVar('primarySubtle'),
+    color: cssVar('primary'),
+    fontSize: 11,
+    fontWeight: 800,
+    fontFamily: cssVar('fontMono'),
+  },
+  imageEditFilename: {
+    color: cssVar('textTertiary'),
+    fontSize: 12,
+    lineHeight: 1.4,
+    wordBreak: 'break-word',
+  },
+  imageEditEmptyBtn: {
+    minHeight: 96,
+    borderRadius: cssVar('radiusMd'),
+    border: `1px dashed ${cssVar('border')}`,
+    background: 'rgba(45, 212, 191, 0.05)',
+    color: cssVar('primary'),
+    fontSize: 13,
+    fontWeight: 700,
+    cursor: 'pointer',
+    fontFamily: cssVar('fontSans'),
+  },
   imagePreviewList: {
     display: 'flex',
     flexWrap: 'wrap',
@@ -2613,6 +3406,11 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     transition: cssVar('transition'),
     fontFamily: cssVar('fontSans'),
+  },
+  attachBtnActive: {
+    borderColor: cssVar('borderFocus'),
+    background: cssVar('primarySubtle'),
+    color: cssVar('primary'),
   },
   sendBtn: {
     display: 'inline-flex',
