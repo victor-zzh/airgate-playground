@@ -1,5 +1,7 @@
 import { Children, cloneElement, isValidElement, useState, useEffect, useRef, useCallback, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 import { cssVar } from '@airgate/theme';
 import { api, chatCompletion, chatCompletionsStream, editImage as requestImageEdit } from './api';
 import type { ChatMessageContent, Conversation, ImageEditResponse, Message, ModelInfo, PlatformInfo, ReasoningEffort, UserInfo } from './api';
@@ -59,6 +61,7 @@ type ImageSizeSettings = {
   baseResolution: BaseResolution;
   ratio: ImageRatio;
 };
+type SelectOption = { value: string; label: string };
 type PendingImage = { id: string; name: string; url: string };
 type EditImage = PendingImage & { file: File };
 type EditSelectionRect = { x: number; y: number; width: number; height: number };
@@ -84,6 +87,7 @@ type MessageContentOptions = {
   imageEditAnnotations?: ImageEditAnnotation[];
   takeImageIndex?: () => number;
   trailingInlineAction?: ReactNode;
+  isMobile?: boolean;
 };
 
 function clampNumber(value: number, min: number, max: number) {
@@ -546,7 +550,7 @@ function renderGeneratedImage(key: string, url: string, alt: string, options: Me
   ) : annotatedImage;
 
   return (
-    <span key={key} style={styles.generatedImageFrame}>
+    <span key={key} style={{ ...styles.generatedImageFrame, ...(options.isMobile ? styles.generatedImageFrameMobile : null) }}>
       {previewableImage}
     </span>
   );
@@ -554,7 +558,7 @@ function renderGeneratedImage(key: string, url: string, alt: string, options: Me
 
 function renderInlineMarkdown(text: string, keyPrefix: string, options: MessageContentOptions = {}) {
   const nodes: ReactNode[] = [];
-  const inlineRe = /(!\[([^\]]*)\]\(([^)\s]+)\)|\[([^\]]+)\]\(([^)\s]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_)/g;
+  const inlineRe = /(`([^`]+)`|\\\(([\s\S]*?)\\\)|(?<!\\)\$(?!\s)([^\n$]*?\S)(?<!\\)\$|!\[([^\]]*)\]\(([^)\s]+)\)|\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -564,15 +568,21 @@ function renderInlineMarkdown(text: string, keyPrefix: string, options: MessageC
     }
 
     const key = `${keyPrefix}-${match.index}`;
-    const imageAlt = match[2];
-    const imageUrl = match[3];
-    const linkText = match[4];
-    const linkUrl = match[5];
-    const inlineCode = match[6];
-    const boldText = match[7] || match[8];
-    const italicText = match[9] || match[10];
+    const inlineCode = match[2];
+    const parenMath = match[3];
+    const dollarMath = match[4];
+    const imageAlt = match[5];
+    const imageUrl = match[6];
+    const linkText = match[7];
+    const linkUrl = match[8];
+    const boldText = match[9] || match[10];
+    const italicText = match[11] || match[12];
 
-    if (imageUrl && isSafeImageUrl(imageUrl)) {
+    if (inlineCode) {
+      nodes.push(<code key={key} style={styles.markdownInlineCode}>{inlineCode}</code>);
+    } else if (parenMath || dollarMath) {
+      nodes.push(renderMath(parenMath || dollarMath, key, false));
+    } else if (imageUrl && isSafeImageUrl(imageUrl)) {
       nodes.push(renderGeneratedImage(key, imageUrl, imageAlt || options.generatedImageAlt || 'Generated image', options));
     } else if (linkUrl && isSafeLinkUrl(linkUrl)) {
       nodes.push(
@@ -580,8 +590,6 @@ function renderInlineMarkdown(text: string, keyPrefix: string, options: MessageC
           {renderInlineMarkdown(linkText, `${key}-link`, options)}
         </a>,
       );
-    } else if (inlineCode) {
-      nodes.push(<code key={key} style={styles.markdownInlineCode}>{inlineCode}</code>);
     } else if (boldText) {
       nodes.push(<strong key={key}>{renderInlineMarkdown(boldText, `${key}-bold`, options)}</strong>);
     } else if (italicText) {
@@ -598,6 +606,18 @@ function renderInlineMarkdown(text: string, keyPrefix: string, options: MessageC
   }
 
   return nodes.length > 0 ? nodes : text;
+}
+
+function renderMath(tex: string, key: string, displayMode: boolean) {
+  const html = katex.renderToString(tex, {
+    displayMode,
+    throwOnError: false,
+    strict: 'ignore',
+    trust: false,
+  });
+
+  const Tag = displayMode ? 'div' : 'span';
+  return <Tag key={key} style={displayMode ? styles.markdownBlockMath : styles.markdownInlineMath} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 function renderHeading(level: number, text: string, key: string, options: MessageContentOptions = {}) {
@@ -632,7 +652,7 @@ function parseImageGroupImages(text: string) {
 
 function renderImageGallery(images: Array<{ alt: string; url: string }>, key: string, options: MessageContentOptions = {}) {
   return (
-    <div key={key} style={styles.imageGroup}>
+    <div key={key} style={{ ...styles.imageGroup, ...(options.isMobile ? styles.imageGroupMobile : null) }}>
       {images.map((image, index) => renderGeneratedImage(`${key}-${index}`, image.url, image.alt || options.generatedImageAlt || 'Generated image', options))}
     </div>
   );
@@ -694,8 +714,10 @@ function renderMessageContent(content: string, options: MessageContentOptions = 
   let quote: string[] = [];
   let listItems: Array<{ text: string; ordered: boolean }> = [];
   let codeLines: string[] = [];
+  let mathLines: string[] = [];
   let pendingImageGroup: Array<{ alt: string; url: string }> = [];
   let inCodeBlock = false;
+  let inMathBlock: '$$' | '\\]' | null = null;
   let nodeIndex = 0;
 
   const nextKey = (type: string) => `${type}-${nodeIndex++}`;
@@ -749,8 +771,29 @@ function renderMessageContent(content: string, options: MessageContentOptions = 
     nodes.push(<pre key={key} style={styles.markdownCodeBlock}><code>{codeLines.join('\n')}</code></pre>);
     codeLines = [];
   };
+  const flushMathBlock = () => {
+    flushPendingImageGroup();
+    const key = nextKey('math');
+    nodes.push(renderMath(mathLines.join('\n').trim(), key, true));
+    mathLines = [];
+  };
 
   for (const line of lines) {
+    if (inMathBlock) {
+      const closingIndex = inMathBlock === '$$' ? line.indexOf('$$') : line.indexOf('\\]');
+      if (closingIndex >= 0) {
+        const delimiterLength = inMathBlock.length;
+        mathLines.push(line.slice(0, closingIndex));
+        flushMathBlock();
+        inMathBlock = null;
+        const rest = line.slice(closingIndex + delimiterLength).trim();
+        if (rest) paragraph.push(rest);
+      } else {
+        mathLines.push(line);
+      }
+      continue;
+    }
+
     const fenceMatch = line.match(/^```/);
     if (fenceMatch) {
       if (inCodeBlock) {
@@ -770,6 +813,31 @@ function renderMessageContent(content: string, options: MessageContentOptions = 
 
     if (!line.trim()) {
       flushBlocks();
+      continue;
+    }
+
+    const trimmedLine = line.trim();
+    const dollarBlockMatch = trimmedLine.match(/^\$\$([\s\S]*?)\$\$$/);
+    const bracketBlockMatch = trimmedLine.match(/^\\\[([\s\S]*?)\\\]$/);
+    if (dollarBlockMatch || bracketBlockMatch) {
+      flushAllBlocks();
+      nodes.push(renderMath((dollarBlockMatch?.[1] || bracketBlockMatch?.[1] || '').trim(), nextKey('math'), true));
+      continue;
+    }
+
+    if (trimmedLine.startsWith('$$') || trimmedLine.startsWith('\\[')) {
+      flushAllBlocks();
+      const isDollarMath = trimmedLine.startsWith('$$');
+      const openingDelimiter = isDollarMath ? '$$' : '\\[';
+      const closingDelimiter = isDollarMath ? '$$' : '\\]';
+      const afterOpening = trimmedLine.slice(openingDelimiter.length);
+      const closingIndex = afterOpening.indexOf(closingDelimiter);
+      if (closingIndex >= 0) {
+        nodes.push(renderMath(afterOpening.slice(0, closingIndex).trim(), nextKey('math'), true));
+      } else {
+        mathLines.push(afterOpening);
+        inMathBlock = closingDelimiter as '$$' | '\\]';
+      }
       continue;
     }
 
@@ -811,6 +879,7 @@ function renderMessageContent(content: string, options: MessageContentOptions = 
   }
 
   if (inCodeBlock) flushCodeBlock();
+  if (inMathBlock) flushMathBlock();
   flushBlocks();
   flushPendingImageGroup();
 
@@ -842,6 +911,7 @@ export default function PlaygroundPage() {
   const [platforms, setPlatforms] = useState<PlatformInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
+  const [openSelectId, setOpenSelectId] = useState<string | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('medium');
   const [imageSizeSettings, setImageSizeSettings] = useState<ImageSizeSettings>(() => cloneImageSizeSettings(DEFAULT_IMAGE_SIZE_SETTINGS));
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
@@ -865,6 +935,19 @@ export default function PlaygroundPage() {
   const activeIdRef = useRef<number | null>(null);
   const streamContextRef = useRef<{ conversationId: number; model: string } | null>(null);
   const skipNextMessagesLoadRef = useRef<number | null>(null);
+  // 用户主动点了发送 / 停止 / Enter 后，标记一下；流式结束后把焦点送回 textarea。
+  // 否则 textarea 在流式期间 disabled，焦点丢失，用户每次都要重新点输入框，烦死。
+  const pendingRefocusRef = useRef(false);
+
+  useEffect(() => {
+    if (!isStreaming && !isEditingImage && pendingRefocusRef.current) {
+      pendingRefocusRef.current = false;
+      // 等下一帧让 disabled=false 先生效再 focus
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+      });
+    }
+  }, [isStreaming, isEditingImage]);
 
   useEffect(() => {
     api.listConversations().then(nextConversations => {
@@ -1023,6 +1106,92 @@ export default function PlaygroundPage() {
   const displayedImageSize = imageSizeSummary(imageSizeSettings);
 
   const selectedPlatform = selectedModelPlatform;
+  const modelOptions = models.map(model => ({
+    value: modelOptionValue(model),
+    label: `${model.name || model.id} · ${platformDisplayName(platforms, model.platform)}`,
+  }));
+
+  const renderCustomSelect = ({
+    id,
+    value,
+    options,
+    onChange,
+    ariaLabel,
+    variant = 'chip',
+  }: {
+    id: string;
+    value: string;
+    options: SelectOption[];
+    onChange: (value: string) => void;
+    ariaLabel: string;
+    variant?: 'model' | 'chip';
+  }) => {
+    const selectedOption = options.find(option => option.value === value);
+    const isOpen = openSelectId === id;
+    const buttonStyle = variant === 'model'
+      ? { ...styles.selectTrigger, ...styles.modelSelectTrigger, ...(isMobile ? styles.modelSelectTriggerMobile : null) }
+      : { ...styles.selectTrigger, ...styles.chipSelectTrigger, ...(isMobile ? styles.chipSelectTriggerMobile : null) };
+    const listbox = (
+      <div
+        style={{
+          ...styles.selectPopover,
+          ...(variant === 'model' ? styles.selectPopoverModel : styles.selectPopoverChip),
+          ...(isMobile ? styles.selectPopoverMobile : null),
+        }}
+        role="listbox"
+        aria-label={ariaLabel}
+      >
+        {options.map(option => {
+          const optionSelected = option.value === value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              style={{
+                ...styles.selectOption,
+                ...(optionSelected ? styles.selectOptionActive : null),
+                ...(variant === 'model' ? styles.selectOptionModel : null),
+              }}
+              role="option"
+              aria-selected={optionSelected}
+              onClick={() => {
+                onChange(option.value);
+                setOpenSelectId(null);
+              }}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+    );
+
+    return (
+      <div style={{ ...styles.selectWrap, ...(variant === 'model' ? styles.modelSelectWrap : null) }}>
+        <button
+          type="button"
+          style={{ ...buttonStyle, ...(isOpen ? styles.selectTriggerOpen : null) }}
+          aria-label={ariaLabel}
+          aria-haspopup="listbox"
+          aria-expanded={isOpen}
+          onClick={() => setOpenSelectId(current => current === id ? null : id)}
+        >
+          <span style={styles.selectTriggerText}>{selectedOption?.label || ariaLabel}</span>
+          <span aria-hidden="true" style={styles.selectTriggerCaret}>v</span>
+        </button>
+        {isOpen && (
+          isMobile ? (
+            <div style={styles.selectOverlay} onClick={() => setOpenSelectId(null)}>
+              <div style={styles.selectSheet} onClick={event => event.stopPropagation()}>
+                <div style={styles.selectSheetHeader}>{ariaLabel}</div>
+                {listbox}
+              </div>
+            </div>
+          ) : listbox
+        )}
+      </div>
+    );
+  };
 
   const createConversation = useCallback(() => {
     const now = new Date().toISOString();
@@ -1314,6 +1483,7 @@ export default function PlaygroundPage() {
   const sendMessage = useCallback(async () => {
     if ((!input.trim() && pendingImages.length === 0) || isStreaming || !activeId) return;
 
+    pendingRefocusRef.current = true;
     const content = messageContentWithImages(input, pendingImages);
     const groupID = resolveGroupID();
     let conversationID = activeId;
@@ -1532,6 +1702,7 @@ export default function PlaygroundPage() {
 
   const submitImageEdit = useCallback(async () => {
     if (!activeId || isStreaming || isEditingImage) return;
+    pendingRefocusRef.current = true;
     if (!selectedPlatform || !selectedModelID) {
       setRetryRequest(null);
       setError(t('playground.select_model_first'));
@@ -1704,6 +1875,7 @@ export default function PlaygroundPage() {
   }, []);
 
   const stopStreaming = useCallback(() => {
+    pendingRefocusRef.current = true;
     abortRef.current?.abort();
     const streamContext = streamContextRef.current;
     if (streamContent || streamReasoning) {
@@ -1861,6 +2033,7 @@ export default function PlaygroundPage() {
     onImagePreview: handleImagePreview,
     imagePreviewTitle: t('playground.preview_image'),
     generatedImageAlt: t('playground.generated_image'),
+    isMobile,
   };
 
   const renderCopyButton = (content: string, label = 'Copy message', preventToggle = false, buttonStyle: CSSProperties = {}) => (
@@ -1918,7 +2091,7 @@ export default function PlaygroundPage() {
   };
 
   return (
-    <div data-full-bleed style={styles.layout}>
+    <div data-full-bleed data-pg-aesthetic style={styles.layout}>
       {sidebarOpen && isMobile && (
         <div
           style={styles.sidebarBackdrop}
@@ -1949,16 +2122,24 @@ export default function PlaygroundPage() {
       )}
 
       {/* ── Sidebar ── */}
-      {sidebarOpen && (
+      {sidebarOpen ? (
         <div style={{ ...styles.sidebar, ...(isMobile ? styles.sidebarMobile : null) }}>
           <div style={styles.sidebarHeader}>
-            <span style={styles.sidebarTitle}>{t('playground.conversations')}</span>
+            <div style={styles.sidebarTitleGroup}>
+              <button style={styles.toggleBtn} onClick={() => setSidebarOpen(false)} aria-label="Collapse conversations">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <path d="M6 2v12" /><path d="M2 2h12v12H2z" /><path d="M10 6l-2 2 2 2" />
+                </svg>
+              </button>
+              <span style={styles.sidebarTitle}>{t('playground.conversations')}</span>
+            </div>
             <button
               style={styles.newBtn}
               onClick={createConversation}
               title={t('playground.new_conversation')}
+              aria-label={t('playground.new_conversation')}
             >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
                 <path d="M7 1v12M1 7h12" />
               </svg>
             </button>
@@ -1970,29 +2151,34 @@ export default function PlaygroundPage() {
               return (
                 <div
                   key={c.id}
+                  className={`pg-conv-item${isActive ? ' is-active' : ''}`}
                   style={{
                     ...styles.convItem,
-                    background: isActive ? cssVar('primarySubtle') : 'transparent',
-                    borderColor: isActive ? cssVar('borderFocus') : 'transparent',
+                    background: isActive ? cssVar('bgHover') : 'transparent',
                   }}
                   onClick={() => openConversation(c.id)}
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={isActive ? cssVar('primary') : cssVar('textTertiary')} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}>
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                  </svg>
                   <span style={{
                     ...styles.convTitle,
                     color: isActive ? cssVar('text') : cssVar('textSecondary'),
+                    fontWeight: isActive ? 500 : 400,
                   }}>
                     {c.title || t('playground.new_conversation')}
                   </span>
                   <button
+                    type="button"
+                    className="pg-conv-delete"
                     style={styles.deleteBtn}
                     onClick={(e) => { e.stopPropagation(); deleteConversation(c.id); }}
                     title={t('playground.delete_conversation')}
+                    aria-label={t('playground.delete_conversation')}
                   >
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                      <path d="M2 2l8 8M10 2l-8 8" />
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M3 6h18" />
+                      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                      <path d="M10 11v6" />
+                      <path d="M14 11v6" />
                     </svg>
                   </button>
                 </div>
@@ -2000,9 +2186,6 @@ export default function PlaygroundPage() {
             })}
             {conversations.length === 0 && (
               <div style={styles.emptyConvList}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={cssVar('textTertiary')} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.5 }}>
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                </svg>
                 <span>{t('playground.no_conversations')}</span>
               </div>
             )}
@@ -2015,157 +2198,43 @@ export default function PlaygroundPage() {
             </div>
           )}
         </div>
+      ) : (
+        <div style={{ ...styles.sidebarRail, ...(isMobile ? styles.sidebarRailMobile : null) }}>
+          <button style={styles.toggleBtn} onClick={() => setSidebarOpen(true)} aria-label="Expand conversations">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <path d="M6 2v12" /><path d="M2 2h12v12H2z" /><path d="M8 6l2 2-2 2" />
+            </svg>
+          </button>
+        </div>
       )}
 
       {/* ── Main ── */}
       <div style={styles.main}>
-        {/* Top bar */}
-        <div style={{ ...styles.topBar, ...(isMobile ? styles.topBarMobile : null) }}>
-          <div style={{ ...styles.topBarLeft, ...(isMobile ? styles.topBarLeftMobile : null) }}>
-            <button style={styles.toggleBtn} onClick={() => setSidebarOpen(!sidebarOpen)}>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                {sidebarOpen
-                  ? <><path d="M6 2v12" /><path d="M2 2h12v12H2z" /><path d="M10 6l-2 2 2 2" /></>
-                  : <><path d="M6 2v12" /><path d="M2 2h12v12H2z" /><path d="M8 6l2 2-2 2" /></>
-                }
-              </svg>
-            </button>
-
-            <div style={{ ...styles.selectors, ...(isMobile ? styles.selectorsMobile : null) }}>
-              <div style={{ ...styles.selectorGroup, ...(isMobile ? styles.selectorGroupMobile : null) }}>
-                <label style={styles.selectorLabel}>{t('playground.model')}</label>
-                <select
-                  style={{ ...styles.select, ...(isMobile ? styles.selectMobile : null) }}
-                  value={selectedModel}
-                  onChange={e => setSelectedModel(e.target.value)}
-                >
-                  {models.map(m => (
-                    <option key={modelOptionValue(m)} value={modelOptionValue(m)}>
-                      {m.name || m.id} · {platformDisplayName(platforms, m.platform)}{isImageModel(m) ? ' · image' : supportsReasoning(m) ? ' · reasoning' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {selectedModelIsImage && (
-                <>
-                  {!isMobile && <div style={styles.selectorDivider} />}
-                  <div style={{ ...styles.selectorGroup, ...(isMobile ? styles.selectorGroupMobile : null) }}>
-                    <label style={styles.selectorLabel}>Size</label>
-                    <div style={{ ...styles.imageSizeInlineControls, ...(isMobile ? styles.imageSizeInlineControlsMobile : null) }}>
-                      <select
-                        style={{ ...styles.imageSizeMiniSelect, ...(isMobile ? styles.imageSizeMiniSelectMobile : null) }}
-                        value={imageSizeSettings.mode}
-                        onChange={e => updateImageSizeSettings({ mode: e.target.value as ImageSizeMode })}
-                        aria-label="Image size mode"
-                      >
-                        <option value="auto">Auto</option>
-                        <option value="ratio">Ratio</option>
-                      </select>
-
-                      {imageSizeSettings.mode === 'ratio' && (
-                        <>
-                          <select
-                            style={{ ...styles.imageSizeMiniSelect, ...(isMobile ? styles.imageSizeMiniSelectMobile : null) }}
-                            value={imageSizeSettings.baseResolution}
-                            onChange={e => updateImageSizeSettings({ baseResolution: Number(e.target.value) as BaseResolution })}
-                            aria-label="Base resolution"
-                          >
-                            {BASE_RESOLUTION_OPTIONS.map(option => (
-                              <option key={option.value} value={option.value}>{option.label}</option>
-                            ))}
-                          </select>
-                          <select
-                            style={{ ...styles.imageSizeMiniSelect, ...(isMobile ? styles.imageSizeMiniSelectMobile : null) }}
-                            value={imageSizeSettings.ratio}
-                            onChange={e => updateImageSizeSettings({ ratio: e.target.value as ImageRatio })}
-                            aria-label="Image ratio"
-                          >
-                            {IMAGE_RATIO_OPTIONS.map(option => (
-                              <option key={option.value} value={option.value}>{option.label}</option>
-                            ))}
-                          </select>
-                        </>
-                      )}
-
-                      <span style={styles.imageSizeInlinePreview}>{displayedImageSize}</span>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {selectedModelSupportsReasoning && (
-                <>
-                  {!isMobile && <div style={styles.selectorDivider} />}
-                  <div style={{ ...styles.selectorGroup, ...(isMobile ? styles.selectorGroupMobile : null) }}>
-                    <label style={styles.selectorLabel}>Effort</label>
-                    <select
-                      style={{ ...styles.select, ...(isMobile ? styles.selectMobile : null) }}
-                      value={reasoningEffort}
-                      onChange={e => setReasoningEffort(e.target.value as ReasoningEffort)}
-                    >
-                      <option value="minimal">Minimal</option>
-                      <option value="low">Low</option>
-                      <option value="medium">Medium</option>
-                      <option value="high">High</option>
-                      <option value="xhigh">XHigh</option>
-                    </select>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-
-          {activeConv && (
-            <span style={{ ...styles.topBarTitle, ...(isMobile ? styles.topBarTitleMobile : null) }}>
-              {activeConv.title || t('playground.new_conversation')}
-            </span>
-          )}
-        </div>
-
         {/* Messages */}
         <div style={styles.messagesArea}>
           {!activeId && (
             <div style={{ ...styles.emptyState, ...(isMobile ? styles.emptyStateMobile : null) }}>
-              <div style={styles.emptyIcon}>
-                <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                  <rect x="4" y="4" width="40" height="40" rx="20" fill={cssVar('primarySubtle')} />
-                  <path d="M24 16v6m0 0v6m0-6h6m-6 0h-6" stroke={cssVar('primary')} strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              </div>
               <div style={styles.emptyTitle}>{t('playground.empty_title')}</div>
               <div style={styles.emptyDesc}>{t('playground.empty_description')}</div>
               <button style={styles.emptyBtn} onClick={createConversation}>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <path d="M7 1v12M1 7h12" />
-                </svg>
                 {t('playground.new_conversation')}
               </button>
             </div>
           )}
 
-          {activeId && messages.map((msg, messageIndex) => (
-            <div key={msg.id} style={{ ...styles.messageRow, ...(isMobile ? styles.messageRowMobile : null) }}>
-              <div style={msg.role === 'user' ? styles.avatarUser : styles.avatarAssistant}>
-                {msg.role === 'user' ? (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                    <circle cx="12" cy="7" r="4" />
-                  </svg>
-                ) : (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z" />
-                    <path d="M6 12h12l2 8H4l2-8z" />
-                  </svg>
-                )}
-              </div>
-              <div style={styles.messageBody}>
-                <div style={styles.messageHeader}>
-                  <div style={styles.messageRole}>
-                    {msg.role === 'user' ? t('playground.you') : t('playground.assistant')}
-                  </div>
-                </div>
-                {msg.role === 'assistant' && msg.reasoning && (
+          {activeId && messages.map((msg, messageIndex) => {
+            const isUser = msg.role === 'user';
+            return (
+            <div
+              key={msg.id}
+              style={{
+                ...styles.messageRow,
+                ...(isMobile ? styles.messageRowMobile : null),
+                ...(isUser ? styles.messageRowUser : styles.messageRowAssistant),
+              }}
+            >
+              <div style={isUser ? { ...styles.userBubble, ...(isMobile ? styles.userBubbleMobile : null) } : styles.assistantBlock}>
+                {!isUser && msg.reasoning && (
                   <details style={styles.reasoningBox} open>
                     <summary style={styles.reasoningSummary}>
                       <span>Thinking</span>
@@ -2177,7 +2246,7 @@ export default function PlaygroundPage() {
                   </details>
                 )}
                 {renderCopyableMessageContent(`message-${msg.id}`, msg.content)}
-                {msg.role === 'assistant' && (messageHasGeneratedImage(msg.content) || msg.model) && (() => {
+                {!isUser && (messageHasGeneratedImage(msg.content) || msg.model) && (() => {
                   const generatedImage = firstGeneratedImage(msg.content);
                   return (
                     <div style={messageHasGeneratedImage(msg.content) ? styles.imageMessageActions : styles.messageMeta}>
@@ -2219,20 +2288,16 @@ export default function PlaygroundPage() {
                 })()}
               </div>
             </div>
-          ))}
+            );
+          })}
 
           {isActiveConversationStreaming && streamContent && (
-            <div style={{ ...styles.messageRow, ...(isMobile ? styles.messageRowMobile : null) }}>
-              <div style={styles.avatarAssistant}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z" />
-                  <path d="M6 12h12l2 8H4l2-8z" />
-                </svg>
-              </div>
-              <div style={styles.messageBody}>
-                <div style={styles.messageHeader}>
-                  <div style={styles.messageRole}>{t('playground.assistant')}</div>
-                </div>
+            <div style={{
+              ...styles.messageRow,
+              ...(isMobile ? styles.messageRowMobile : null),
+              ...styles.messageRowAssistant,
+            }}>
+              <div style={styles.assistantBlock}>
                 {streamReasoning && (
                   <details style={styles.reasoningBox} open>
                     <summary style={styles.reasoningSummary}>
@@ -2254,17 +2319,12 @@ export default function PlaygroundPage() {
           )}
 
           {isActiveConversationStreaming && !streamContent && (
-            <div style={{ ...styles.messageRow, ...(isMobile ? styles.messageRowMobile : null) }}>
-              <div style={styles.avatarAssistant}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z" />
-                  <path d="M6 12h12l2 8H4l2-8z" />
-                </svg>
-              </div>
-              <div style={styles.messageBody}>
-                <div style={styles.messageHeader}>
-                  <div style={styles.messageRole}>{t('playground.assistant')}</div>
-                </div>
+            <div style={{
+              ...styles.messageRow,
+              ...(isMobile ? styles.messageRowMobile : null),
+              ...styles.messageRowAssistant,
+            }}>
+              <div style={styles.assistantBlock}>
                 {streamReasoning ? (
                   <details style={styles.reasoningBox} open>
                     <summary style={styles.reasoningSummary}>
@@ -2346,7 +2406,11 @@ export default function PlaygroundPage() {
         {/* Input */}
         {activeId && (
           <div style={{ ...styles.inputArea, ...(isMobile ? styles.inputAreaMobile : null) }}>
-            <div style={{ ...styles.inputWrapper, ...(isActiveConversationStreaming ? styles.inputWrapperStreaming : null) }}>
+            <div style={{
+              ...styles.inputWrapper,
+              ...(isMobile ? styles.inputWrapperMobile : null),
+              ...(isActiveConversationStreaming ? styles.inputWrapperStreaming : null),
+            }}>
               {selectedModelIsImage && isEditPanelOpen && (
                 <div style={{ ...styles.imageEditPanel, ...(isMobile ? styles.imageEditPanelMobile : null) }}>
                   <div style={{ ...styles.imageEditHeader, ...(isMobile ? styles.imageEditHeaderMobile : null) }}>
@@ -2480,7 +2544,64 @@ export default function PlaygroundPage() {
                 disabled={isActiveConversationStreaming}
               />
               <div style={{ ...styles.inputActions, ...(isMobile ? styles.inputActionsMobile : null) }}>
-                <span style={{ ...styles.inputHint, ...(isMobile ? styles.inputHintMobile : null) }}>{t('playground.input_hint')}</span>
+                <div style={{ ...styles.selectors, ...(isMobile ? styles.selectorsMobile : null) }}>
+                  {renderCustomSelect({
+                    id: 'model',
+                    value: selectedModel,
+                    options: modelOptions,
+                    onChange: setSelectedModel,
+                    ariaLabel: t('playground.model'),
+                    variant: 'model',
+                  })}
+
+                  {selectedModelIsImage && (
+                    <div style={{ ...styles.imageSizeInlineControls, ...(isMobile ? styles.imageSizeInlineControlsMobile : null) }}>
+                      {renderCustomSelect({
+                        id: 'image-size-mode',
+                        value: imageSizeSettings.mode,
+                        options: [
+                          { value: 'auto', label: 'Auto' },
+                          { value: 'ratio', label: 'Ratio' },
+                        ],
+                        onChange: value => updateImageSizeSettings({ mode: value as ImageSizeMode }),
+                        ariaLabel: 'Image size mode',
+                      })}
+                      {imageSizeSettings.mode === 'ratio' && (
+                        <>
+                          {renderCustomSelect({
+                            id: 'base-resolution',
+                            value: String(imageSizeSettings.baseResolution),
+                            options: BASE_RESOLUTION_OPTIONS.map(option => ({ value: String(option.value), label: option.label })),
+                            onChange: value => updateImageSizeSettings({ baseResolution: Number(value) as BaseResolution }),
+                            ariaLabel: 'Base resolution',
+                          })}
+                          {renderCustomSelect({
+                            id: 'image-ratio',
+                            value: imageSizeSettings.ratio,
+                            options: IMAGE_RATIO_OPTIONS,
+                            onChange: value => updateImageSizeSettings({ ratio: value as ImageRatio }),
+                            ariaLabel: 'Image ratio',
+                          })}
+                        </>
+                      )}
+                      {!isMobile && <span style={styles.imageSizeInlinePreview}>{displayedImageSize}</span>}
+                    </div>
+                  )}
+
+                  {selectedModelSupportsReasoning && renderCustomSelect({
+                    id: 'reasoning-effort',
+                    value: reasoningEffort,
+                    options: [
+                      { value: 'minimal', label: 'Minimal' },
+                      { value: 'low', label: 'Low' },
+                      { value: 'medium', label: 'Medium' },
+                      { value: 'high', label: 'High' },
+                      { value: 'xhigh', label: 'XHigh' },
+                    ],
+                    onChange: value => setReasoningEffort(value as ReasoningEffort),
+                    ariaLabel: 'Reasoning effort',
+                  })}
+                </div>
                 <div style={{ ...styles.inputButtonGroup, ...(isMobile ? styles.inputButtonGroupMobile : null) }}>
                   {selectedModelIsImage && (
                     <button
@@ -2490,6 +2611,7 @@ export default function PlaygroundPage() {
                         ...(isEditPanelOpen ? styles.attachBtnActive : null),
                         ...(isMobile ? styles.actionBtnMobile : null),
                       }}
+                      onMouseDown={e => e.preventDefault()}
                       onClick={() => {
                         if (editSource) {
                           setIsEditPanelOpen(current => !current);
@@ -2510,6 +2632,7 @@ export default function PlaygroundPage() {
                   <button
                     type="button"
                     style={{ ...styles.attachBtn, ...(isMobile ? styles.actionBtnMobile : null) }}
+                    onMouseDown={e => e.preventDefault()}
                     onClick={triggerImagePicker}
                     disabled={isActiveConversationStreaming || isEditPanelOpen}
                     title={t('playground.attach_images')}
@@ -2522,7 +2645,11 @@ export default function PlaygroundPage() {
                     {t('playground.image')}
                   </button>
                   {isActiveConversationStreaming ? (
-                    <button style={{ ...styles.stopBtn, ...(isMobile ? styles.actionBtnMobile : null) }} onClick={stopStreaming}>
+                    <button
+                      style={{ ...styles.stopBtn, ...(isMobile ? styles.actionBtnMobile : null) }}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={stopStreaming}
+                    >
                       <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
                         <rect x="2" y="2" width="8" height="8" rx="1" />
                       </svg>
@@ -2535,6 +2662,7 @@ export default function PlaygroundPage() {
                         ...(isMobile ? styles.actionBtnMobile : null),
                         opacity: canSendMessage ? 1 : 0.4,
                       }}
+                      onMouseDown={e => e.preventDefault()}
                       onClick={() => {
                         if (isEditPanelOpen) {
                           void submitImageEdit();
@@ -2573,6 +2701,40 @@ const keyframes = `
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* ── Quiet Modern aesthetic ──
+   单一字体（系统 Chinese ladder + 现代 sans for Latin），多权重撑层级，
+   完全跟随 SDK 主题色系。没有任何复古/编辑级装饰。 */
+[data-pg-aesthetic] {
+  font-feature-settings: 'cv11' on, 'ss01' on;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* 删除按钮：hover 才显出，颜色保持中性，hover 时才染 danger */
+.pg-conv-delete {
+  opacity: 0;
+  color: var(--ag-color-textTertiary, #9ca3af);
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+.pg-conv-item:hover .pg-conv-delete,
+.pg-conv-item:focus-within .pg-conv-delete {
+  opacity: 1;
+}
+.pg-conv-delete:hover {
+  background: var(--ag-color-dangerSubtle, rgba(239, 68, 68, 0.12));
+  color: var(--ag-color-danger, #ef4444);
+}
+.pg-conv-delete:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--ag-color-borderFocus, #3b82f6);
+  outline-offset: 1px;
+}
+
+.pg-conv-item {
+  position: relative;
+}
 `;
 
 const styles: Record<string, React.CSSProperties> = {
@@ -2601,6 +2763,26 @@ const styles: Record<string, React.CSSProperties> = {
     position: 'relative',
     zIndex: 3,
   },
+  sidebarRail: {
+    width: 48,
+    minWidth: 48,
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+    paddingTop: 12,
+    background: cssVar('bg'),
+    borderRight: `1px solid ${cssVar('borderSubtle')}`,
+    flexShrink: 0,
+    zIndex: 3,
+  },
+  sidebarRailMobile: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    background: 'transparent',
+    borderRight: 'none',
+    zIndex: 4,
+  },
   sidebarBackdrop: {
     position: 'absolute',
     inset: 0,
@@ -2620,14 +2802,20 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '18px 16px 14px',
+    gap: 8,
+    padding: '20px 12px 14px 8px',
+  },
+  sidebarTitleGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 0,
   },
   sidebarTitle: {
-    fontSize: 11,
-    fontWeight: 600,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.08em',
-    color: cssVar('textTertiary'),
+    fontSize: 13,
+    fontWeight: 500,
+    color: cssVar('text'),
+    letterSpacing: '-0.005em',
   },
   newBtn: {
     display: 'flex',
@@ -2635,28 +2823,28 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     width: 28,
     height: 28,
-    border: `1px solid ${cssVar('border')}`,
-    borderRadius: cssVar('radiusSm'),
-    background: cssVar('bgSurface'),
+    border: 'none',
+    borderRadius: 8,
+    background: 'transparent',
     color: cssVar('textSecondary'),
     cursor: 'pointer',
     transition: cssVar('transition'),
+    flexShrink: 0,
   },
   convList: {
     flex: 1,
     overflowY: 'auto',
-    padding: '4px 8px',
+    padding: '2px 8px 8px',
   },
   convItem: {
     display: 'flex',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 8,
-    padding: '10px 10px',
-    borderRadius: cssVar('radiusSm'),
+    padding: '8px 10px',
+    borderRadius: 8,
     cursor: 'pointer',
     transition: cssVar('transition'),
-    border: '1px solid transparent',
-    marginBottom: 2,
+    marginBottom: 1,
   },
   convTitle: {
     flex: 1,
@@ -2665,18 +2853,22 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: 'nowrap',
     fontSize: 13,
     lineHeight: '18px',
+    letterSpacing: '-0.003em',
   },
   deleteBtn: {
-    background: 'none',
+    width: 22,
+    height: 22,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'transparent',
     border: 'none',
-    color: cssVar('textTertiary'),
+    borderRadius: 6,
     cursor: 'pointer',
-    padding: '2px',
+    padding: 0,
     lineHeight: 1,
     flexShrink: 0,
-    opacity: 0.5,
-    transition: cssVar('transition'),
-    marginTop: 1,
+    marginTop: 0,
   },
   emptyConvList: {
     display: 'flex',
@@ -2690,22 +2882,20 @@ const styles: Record<string, React.CSSProperties> = {
   balanceBar: {
     display: 'flex',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '12px 16px',
-    borderTop: `1px solid ${cssVar('borderSubtle')}`,
+    alignItems: 'baseline',
+    padding: '14px 16px 18px',
   },
   balanceLabel: {
     fontSize: 11,
     fontWeight: 500,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.06em',
     color: cssVar('textTertiary'),
+    letterSpacing: '0.02em',
   },
   balanceValue: {
     fontSize: 13,
-    fontWeight: 600,
-    fontFamily: cssVar('fontMono'),
-    color: cssVar('primary'),
+    fontWeight: 500,
+    color: cssVar('text'),
+    fontVariantNumeric: 'tabular-nums',
   },
 
   // ── Main ──
@@ -2718,34 +2908,6 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
   },
 
-  // ── Top bar ──
-  topBar: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 16,
-    padding: '8px 20px',
-    borderBottom: `1px solid ${cssVar('borderSubtle')}`,
-    background: cssVar('bg'),
-    flexShrink: 0,
-    minHeight: 52,
-  },
-  topBarMobile: {
-    alignItems: 'flex-start',
-    flexDirection: 'column',
-    padding: '8px 12px',
-    gap: 8,
-  },
-  topBarLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-  },
-  topBarLeftMobile: {
-    width: '100%',
-    alignItems: 'flex-start',
-    gap: 8,
-  },
   toggleBtn: {
     display: 'flex',
     alignItems: 'center',
@@ -2760,72 +2922,171 @@ const styles: Record<string, React.CSSProperties> = {
     transition: cssVar('transition'),
     flexShrink: 0,
   },
+  // 模型/尺寸/Effort 选择器现在嵌在输入卡片内（左侧），跟附件 / 图片 / 发送按钮
+  // 同一行。所以 chip 走透明底，避免在 bgSurface 卡片上再叠一层 surface 制造
+  // "卡上有卡"的层级噪声。
   selectors: {
     display: 'flex',
     alignItems: 'center',
-    gap: 0,
-    background: cssVar('bgSurface'),
-    borderRadius: cssVar('radiusSm'),
-    border: `1px solid ${cssVar('borderSubtle')}`,
-    overflow: 'hidden',
+    gap: 6,
+    flexWrap: 'wrap',
+    minWidth: 0,
+    flex: 1,
   },
   selectorsMobile: {
-    flex: 1,
-    minWidth: 0,
-    display: 'grid',
-    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-    alignItems: 'stretch',
-    gap: 6,
-    padding: 6,
-    overflow: 'visible',
+    width: '100%',
+    gap: 4,
+    rowGap: 2,
   },
-  selectorGroup: {
-    display: 'flex',
+  selectWrap: {
+    position: 'relative',
+    minWidth: 0,
+  },
+  modelSelectWrap: {
+    flex: '0 1 280px',
+  },
+  selectTrigger: {
+    display: 'inline-flex',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 6,
-    padding: '6px 12px',
-    minWidth: 0,
-  },
-  selectorGroupMobile: {
-    minWidth: 0,
-    padding: 0,
-    flexDirection: 'column',
-    alignItems: 'stretch',
-    gap: 3,
-  },
-  selectorLabel: {
-    fontSize: 10,
-    fontWeight: 600,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.08em',
-    color: cssVar('textTertiary'),
-    whiteSpace: 'nowrap',
-  },
-  selectorDivider: {
-    width: 1,
-    height: 24,
-    background: cssVar('borderSubtle'),
-    flexShrink: 0,
-  },
-  select: {
-    padding: '2px 4px',
+    width: '100%',
     border: 'none',
+    borderRadius: 8,
     background: 'transparent',
-    color: cssVar('text'),
-    fontSize: 13,
+    color: cssVar('textSecondary'),
+    fontFamily: cssVar('fontSans'),
     fontWeight: 500,
     outline: 'none',
     cursor: 'pointer',
-    fontFamily: cssVar('fontSans'),
-    minWidth: 0,
+    transition: cssVar('transition'),
   },
-  selectMobile: {
-    width: '100%',
-    minHeight: 30,
-    borderRadius: cssVar('radiusSm'),
-    padding: '5px 7px',
-    background: cssVar('bgDeep'),
+  selectTriggerOpen: {
+    background: cssVar('bgHover'),
+    color: cssVar('text'),
+  },
+  selectTriggerText: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  selectTriggerCaret: {
+    flexShrink: 0,
+    color: cssVar('textTertiary'),
+    fontSize: 10,
+    lineHeight: 1,
+  },
+  modelSelectTrigger: {
+    maxWidth: 280,
+    padding: '4px 8px',
+    color: cssVar('text'),
+    fontSize: 13,
+    letterSpacing: '-0.003em',
+  },
+  modelSelectTriggerMobile: {
+    maxWidth: '100%',
+    padding: '3px 6px',
     fontSize: 12,
+  },
+  chipSelectTrigger: {
+    height: 26,
+    padding: '2px 8px',
+    fontSize: 12,
+  },
+  chipSelectTriggerMobile: {
+    height: 24,
+    padding: '1px 6px',
+    fontSize: 11,
+  },
+  selectPopover: {
+    position: 'absolute',
+    left: 0,
+    bottom: 'calc(100% + 8px)',
+    zIndex: 20,
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: '100%',
+    maxHeight: 320,
+    padding: 6,
+    border: `1px solid ${cssVar('border')}`,
+    borderRadius: cssVar('radiusSm'),
+    background: cssVar('bg'),
+    boxShadow: '0 20px 54px rgba(0, 0, 0, 0.34)',
+    overflowY: 'auto',
+  },
+  selectPopoverModel: {
+    width: 390,
+    maxWidth: 'calc(100vw - 32px)',
+  },
+  selectPopoverChip: {
+    width: 'max-content',
+    minWidth: 116,
+  },
+  selectOverlay: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 1000,
+    display: 'flex',
+    alignItems: 'flex-end',
+    padding: 10,
+    background: 'rgba(4, 7, 13, 0.62)',
+  },
+  selectSheet: {
+    width: '100%',
+    maxHeight: '72vh',
+    padding: 8,
+    border: `1px solid ${cssVar('border')}`,
+    borderRadius: '18px 18px 14px 14px',
+    background: cssVar('bg'),
+    boxShadow: '0 -18px 60px rgba(0, 0, 0, 0.38)',
+    overflow: 'hidden',
+  },
+  selectSheetHeader: {
+    padding: '5px 8px 10px',
+    color: cssVar('textTertiary'),
+    fontSize: 11,
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+  },
+  selectPopoverMobile: {
+    position: 'relative',
+    left: 'auto',
+    bottom: 'auto',
+    zIndex: 'auto',
+    width: '100%',
+    minWidth: '100%',
+    maxWidth: 'none',
+    maxHeight: 'calc(72vh - 48px)',
+    padding: 0,
+    border: 'none',
+    borderRadius: 0,
+    background: 'transparent',
+    boxShadow: 'none',
+  },
+  selectOption: {
+    display: 'block',
+    width: '100%',
+    padding: '8px 10px',
+    border: 'none',
+    borderRadius: 8,
+    background: 'transparent',
+    color: cssVar('textSecondary'),
+    fontFamily: cssVar('fontSans'),
+    fontSize: 12,
+    fontWeight: 500,
+    lineHeight: 1.35,
+    textAlign: 'left',
+    whiteSpace: 'nowrap',
+    cursor: 'pointer',
+  },
+  selectOptionModel: {
+    fontSize: 13,
+  },
+  selectOptionActive: {
+    background: cssVar('primarySubtle'),
+    color: cssVar('primary'),
   },
   imageSizeInlineControls: {
     display: 'flex',
@@ -2834,46 +3095,16 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
   },
   imageSizeInlineControlsMobile: {
+    flex: '0 1 auto',
     flexWrap: 'wrap',
-  },
-  imageSizeMiniSelect: {
-    height: 28,
-    maxWidth: 96,
-    padding: '3px 6px',
-    border: `1px solid ${cssVar('borderSubtle')}`,
-    borderRadius: cssVar('radiusSm'),
-    background: cssVar('bgDeep'),
-    color: cssVar('text'),
-    fontSize: 12,
-    fontWeight: 600,
-    outline: 'none',
-    fontFamily: cssVar('fontSans'),
-  },
-  imageSizeMiniSelectMobile: {
-    flex: '1 1 74px',
-    maxWidth: 'none',
+    gap: 4,
   },
   imageSizeInlinePreview: {
-    minWidth: 82,
-    padding: '3px 7px',
-    borderRadius: cssVar('radiusSm'),
-    background: cssVar('primarySubtle'),
-    color: cssVar('primary'),
+    padding: '3px 9px',
+    color: cssVar('textTertiary'),
     fontSize: 12,
-    fontWeight: 700,
     fontFamily: cssVar('fontMono'),
     whiteSpace: 'nowrap',
-  },
-  topBarTitle: {
-    fontSize: 12,
-    color: cssVar('textTertiary'),
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  topBarTitleMobile: {
-    width: '100%',
-    display: 'none',
   },
 
   // ── Messages ──
@@ -2887,102 +3118,92 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   // ── Empty state ──
+  // 居中、克制、靠层级与留白说话。一个标题、一个描述、一个 primary CTA。
   emptyState: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     flex: 1,
-    gap: 12,
-    padding: 40,
+    gap: 14,
+    padding: '40px 32px',
+    maxWidth: 480,
+    margin: '0 auto',
+    width: '100%',
+    textAlign: 'center',
     animation: 'pg-fadein 0.4s ease-out',
   },
   emptyStateMobile: {
-    padding: '32px 20px',
-  },
-  emptyIcon: {
-    marginBottom: 8,
+    padding: '32px 24px',
+    gap: 12,
   },
   emptyTitle: {
-    fontSize: 18,
-    fontWeight: 600,
+    fontSize: 32,
+    fontWeight: 500,
     color: cssVar('text'),
-    letterSpacing: '-0.02em',
+    lineHeight: 1.18,
+    letterSpacing: '-0.018em',
+    margin: 0,
   },
   emptyDesc: {
-    fontSize: 13,
-    color: cssVar('textSecondary'),
-    maxWidth: 300,
-    textAlign: 'center',
-    lineHeight: 1.5,
+    fontSize: 14,
+    color: cssVar('textTertiary'),
+    lineHeight: 1.55,
+    margin: 0,
   },
   emptyBtn: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: 8,
-    padding: '10px 22px',
+    padding: '10px 20px',
     border: 'none',
-    borderRadius: cssVar('radiusMd'),
+    borderRadius: 999,
     background: cssVar('primary'),
     color: cssVar('textInverse'),
-    fontSize: 14,
-    fontWeight: 600,
+    fontSize: 13,
+    fontWeight: 500,
     cursor: 'pointer',
     transition: cssVar('transition'),
-    marginTop: 8,
-    fontFamily: cssVar('fontSans'),
+    marginTop: 12,
   },
 
   // ── Message row ──
+  // ChatGPT 风格：用户消息右对齐圆角气泡（bgSurface），助手消息左对齐无气泡纯
+  // 排版。两侧都不显示 avatar 和"你/助手"role label。借助 padding 拉空气，
+  // 取消行间分割线。整列居中、限定 768px 宽，营造窄列阅读体验。
   messageRow: {
     display: 'flex',
-    gap: 14,
-    padding: '20px 28px',
+    width: '100%',
+    maxWidth: 768,
+    margin: '0 auto',
+    padding: '14px 24px',
     animation: 'pg-fadein 0.25s ease-out',
-    borderBottom: `1px solid ${cssVar('borderSubtle')}`,
   },
   messageRowMobile: {
-    gap: 10,
-    padding: '16px 14px',
+    padding: '10px 14px',
   },
-  avatarUser: {
-    width: 30,
-    height: 30,
-    borderRadius: '50%',
-    background: cssVar('primary'),
-    color: cssVar('textInverse'),
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
+  messageRowUser: {
+    justifyContent: 'flex-end',
   },
-  avatarAssistant: {
-    width: 30,
-    height: 30,
-    borderRadius: '50%',
-    background: cssVar('bgSurface'),
-    border: `1px solid ${cssVar('border')}`,
-    color: cssVar('textSecondary'),
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
+  messageRowAssistant: {
+    justifyContent: 'flex-start',
   },
-  messageBody: {
-    flex: 1,
+  userBubble: {
+    maxWidth: '78%',
     minWidth: 0,
+    padding: '11px 16px',
+    borderRadius: 18,
+    background: cssVar('bgSurface'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
   },
-  messageHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    minHeight: 24,
-    marginBottom: 4,
+  userBubbleMobile: {
+    maxWidth: '82%',
+    padding: '10px 13px',
+    borderRadius: 16,
   },
-  messageRole: {
-    fontSize: 12,
-    fontWeight: 600,
-    color: cssVar('text'),
+  assistantBlock: {
+    maxWidth: '100%',
+    width: '100%',
+    minWidth: 0,
   },
   messageCopyBtn: {
     display: 'inline-flex',
@@ -3018,41 +3239,45 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
     lineHeight: 1.72,
     wordBreak: 'break-word',
-    color: '#cfd6e6',
+    color: cssVar('text'),
   },
   markdownParagraph: {
     margin: '0 0 11px',
   },
   markdownH1: {
-    margin: '2px 0 14px',
-    fontSize: 21,
+    margin: '4px 0 14px',
+    fontSize: 22,
+    fontWeight: 600,
     lineHeight: 1.25,
-    color: '#eef4ff',
-    letterSpacing: '-0.02em',
+    letterSpacing: '-0.015em',
+    color: cssVar('text'),
   },
   markdownH2: {
     margin: '18px 0 10px',
-    fontSize: 17,
+    fontSize: 18,
+    fontWeight: 600,
     lineHeight: 1.3,
-    color: '#e8eefb',
     letterSpacing: '-0.01em',
+    color: cssVar('text'),
   },
   markdownH3: {
     margin: '16px 0 8px',
     fontSize: 15,
+    fontWeight: 600,
     lineHeight: 1.35,
-    color: '#dfe7f6',
+    color: cssVar('text'),
   },
   markdownH4: {
     margin: '14px 0 8px',
     fontSize: 14,
+    fontWeight: 600,
     lineHeight: 1.4,
-    color: '#d8e0ef',
+    color: cssVar('text'),
   },
   markdownList: {
     margin: '0 0 12px',
     paddingLeft: 20,
-    color: '#cfd6e6',
+    color: cssVar('text'),
   },
   markdownListItem: {
     margin: '4px 0',
@@ -3060,44 +3285,60 @@ const styles: Record<string, React.CSSProperties> = {
   markdownBlockquote: {
     margin: '0 0 12px',
     padding: '9px 13px',
-    borderLeft: '3px solid rgba(62, 207, 180, 0.48)',
+    borderLeft: `3px solid ${cssVar('primary')}`,
     borderRadius: '0 10px 10px 0',
-    background: 'rgba(62, 207, 180, 0.055)',
-    color: '#aeb8ca',
+    background: cssVar('primarySubtle'),
+    color: cssVar('textSecondary'),
   },
   markdownCodeBlock: {
     margin: '4px 0 14px',
     padding: '13px 15px',
     borderRadius: cssVar('radiusSm'),
-    background: 'linear-gradient(180deg, rgba(17, 23, 36, 0.92), rgba(10, 14, 24, 0.92))',
-    border: '1px solid rgba(148, 175, 225, 0.075)',
-    color: '#d5deef',
+    background: cssVar('bgDeep'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    color: cssVar('text'),
     fontFamily: cssVar('fontMono'),
     fontSize: 12.5,
     lineHeight: 1.72,
     overflowX: 'auto',
     whiteSpace: 'pre',
-    boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.025)',
   },
   markdownInlineCode: {
     padding: '1px 5px 2px',
     borderRadius: 6,
-    background: 'rgba(125, 211, 252, 0.08)',
-    border: '1px solid rgba(125, 211, 252, 0.11)',
-    color: '#b8e7ff',
+    background: cssVar('bgSurface'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    color: cssVar('primary'),
     fontFamily: cssVar('fontMono'),
     fontSize: '0.9em',
   },
+  markdownInlineMath: {
+    display: 'inline-block',
+    maxWidth: '100%',
+    overflowX: 'auto',
+    overflowY: 'hidden',
+    verticalAlign: '-0.18em',
+  },
+  markdownBlockMath: {
+    margin: '4px 0 14px',
+    padding: '12px 14px',
+    borderRadius: cssVar('radiusSm'),
+    background: cssVar('bgSurface'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    color: cssVar('text'),
+    overflowX: 'auto',
+    overflowY: 'hidden',
+  },
   markdownLink: {
-    color: '#6ee7d1',
+    color: cssVar('primary'),
     textDecoration: 'underline',
-    textDecorationColor: 'rgba(110, 231, 209, 0.28)',
+    textDecorationColor: cssVar('primary'),
     textUnderlineOffset: 3,
   },
   markdownDivider: {
     height: 1,
     border: 0,
-    background: 'linear-gradient(90deg, transparent, rgba(148, 175, 225, 0.14), transparent)',
+    background: cssVar('border'),
     margin: '16px 0',
   },
   reasoningBox: {
@@ -3122,7 +3363,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
     lineHeight: 1.6,
     wordBreak: 'break-word',
-    color: '#9ea9bd',
+    color: cssVar('textSecondary'),
   },
   imageGroup: {
     display: 'flex',
@@ -3137,6 +3378,11 @@ const styles: Record<string, React.CSSProperties> = {
     overscrollBehaviorX: 'contain',
     scrollSnapType: 'x proximity',
   },
+  imageGroupMobile: {
+    gap: 10,
+    marginTop: 8,
+    paddingBottom: 6,
+  },
   generatedImageFrame: {
     display: 'inline-flex',
     flexDirection: 'column',
@@ -3145,6 +3391,10 @@ const styles: Record<string, React.CSSProperties> = {
     flex: '0 0 clamp(220px, 32vw, 420px)',
     maxWidth: 'min(100%, 420px)',
     scrollSnapAlign: 'start',
+  },
+  generatedImageFrameMobile: {
+    flexBasis: 'min(78vw, 300px)',
+    maxWidth: 'min(100%, 300px)',
   },
   generatedImagePreviewBtn: {
     display: 'block',
@@ -3278,11 +3528,11 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 4,
     padding: '7px 12px',
     borderRadius: '999px',
-    background: 'rgba(10, 14, 24, 0.9)',
+    background: cssVar('bgElevated'),
     border: `1px solid ${cssVar('borderSubtle')}`,
     color: cssVar('textSecondary'),
     fontSize: 12,
-    boxShadow: '0 10px 28px rgba(0, 0, 0, 0.22)',
+    boxShadow: cssVar('shadowMd'),
   },
   messageMeta: {
     display: 'flex',
@@ -3370,26 +3620,36 @@ const styles: Record<string, React.CSSProperties> = {
 
   // ── Input ──
   inputArea: {
-    padding: '16px 28px 20px',
-    borderTop: `1px solid ${cssVar('borderSubtle')}`,
-    background: cssVar('bg'),
+    padding: '12px 28px 20px',
+    background: 'transparent',
     flexShrink: 0,
   },
   inputAreaMobile: {
-    padding: '10px 12px 12px',
+    padding: '8px 10px 10px',
   },
   inputWrapper: {
     display: 'flex',
     flexDirection: 'column',
     gap: 8,
     border: `1px solid ${cssVar('border')}`,
-    borderRadius: cssVar('radiusMd'),
+    borderRadius: 22,
     background: cssVar('bgSurface'),
     paddingTop: 10,
     paddingRight: 12,
     paddingBottom: 8,
     paddingLeft: 12,
     transition: cssVar('transition'),
+    width: '100%',
+    maxWidth: 768,
+    margin: '0 auto',
+  },
+  inputWrapperMobile: {
+    gap: 7,
+    borderRadius: 20,
+    paddingTop: 9,
+    paddingRight: 10,
+    paddingBottom: 8,
+    paddingLeft: 10,
   },
   inputWrapperStreaming: {
     paddingTop: 8,
@@ -3402,8 +3662,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 12,
     borderRadius: cssVar('radiusMd'),
     border: `1px solid ${cssVar('borderSubtle')}`,
-    background: 'linear-gradient(180deg, rgba(19, 28, 43, 0.72), rgba(10, 15, 26, 0.72))',
-    boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.035)',
+    background: cssVar('bgSurface'),
   },
   imageEditPanelMobile: {
     padding: 10,
@@ -3426,7 +3685,7 @@ const styles: Record<string, React.CSSProperties> = {
   imageEditTitle: {
     fontSize: 13,
     fontWeight: 700,
-    color: '#edf4ff',
+    color: cssVar('text'),
   },
   imageEditSubtitle: {
     fontSize: 12,
@@ -3611,8 +3870,9 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 12,
   },
   inputActionsMobile: {
-    alignItems: 'center',
-    gap: 8,
+    alignItems: 'stretch',
+    flexDirection: 'column',
+    gap: 7,
   },
   inputButtonGroup: {
     display: 'flex',
@@ -3620,9 +3880,10 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
   },
   inputButtonGroupMobile: {
-    flex: 1,
+    width: '100%',
     minWidth: 0,
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 6,
   },
   fileInput: {
     display: 'none',
@@ -3638,19 +3899,17 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 6,
-    padding: '6px 12px',
-    border: `1px solid ${cssVar('border')}`,
-    borderRadius: cssVar('radiusSm'),
-    background: cssVar('bgSurface'),
+    padding: '7px 12px',
+    border: 'none',
+    borderRadius: 999,
+    background: 'transparent',
     color: cssVar('textSecondary'),
-    fontSize: 13,
-    fontWeight: 600,
+    fontSize: 12,
+    fontWeight: 500,
     cursor: 'pointer',
     transition: cssVar('transition'),
-    fontFamily: cssVar('fontSans'),
   },
   attachBtnActive: {
-    borderColor: cssVar('borderFocus'),
     background: cssVar('primarySubtle'),
     color: cssVar('primary'),
   },
@@ -3658,34 +3917,34 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 6,
-    padding: '6px 16px',
+    padding: '7px 14px',
     border: 'none',
-    borderRadius: cssVar('radiusSm'),
+    borderRadius: 999,
     background: cssVar('primary'),
     color: cssVar('textInverse'),
     fontSize: 13,
-    fontWeight: 600,
+    fontWeight: 500,
     cursor: 'pointer',
     transition: cssVar('transition'),
-    fontFamily: cssVar('fontSans'),
   },
   stopBtn: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 6,
-    padding: '6px 16px',
+    padding: '7px 14px',
     border: 'none',
-    borderRadius: cssVar('radiusSm'),
-    background: cssVar('danger'),
-    color: cssVar('textInverse'),
+    borderRadius: 999,
+    background: cssVar('dangerSubtle'),
+    color: cssVar('danger'),
     fontSize: 13,
-    fontWeight: 600,
+    fontWeight: 500,
     cursor: 'pointer',
-    fontFamily: cssVar('fontSans'),
   },
   actionBtnMobile: {
-    flex: 1,
-    minWidth: 0,
+    flex: '0 1 auto',
+    minWidth: 44,
+    minHeight: 36,
     justifyContent: 'center',
+    padding: '8px 11px',
   },
 };
