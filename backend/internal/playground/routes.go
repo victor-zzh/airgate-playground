@@ -192,6 +192,16 @@ func (p *Plugin) handlePersistMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	// 派生请求级 logger 写回 ctx
+	rid := sdk.ExtractOrGenerateRequestID(r.Header)
+	ctx := sdk.WithRequestID(r.Context(), rid)
+	ctx, logger := sdk.LoggerWithRequestID(ctx)
+	logger.Debug("playground_request_received",
+		sdk.LogFieldMethod, r.Method,
+		sdk.LogFieldPath, r.URL.Path,
+		sdk.LogFieldUserID, parseUserID(r),
+	)
+
 	platform := strings.TrimSpace(r.Header.Get("X-Airgate-Platform"))
 	if platform == "" {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "platform required")
@@ -216,9 +226,15 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
 	headers.Set("X-Airgate-Platform", platform)
+	logger.Debug("upstream_request_start",
+		sdk.LogFieldPlatform, platform,
+		sdk.LogFieldModel, fields.Model,
+		sdk.LogFieldPath, "/v1/chat/completions",
+		"stream", stream,
+	)
 	if !stream {
 		headers.Set("Accept", "application/json")
-		resp, err := p.host.Forward(r.Context(), sdk.HostForwardRequest{
+		resp, err := p.host.Forward(ctx, sdk.HostForwardRequest{
 			UserID:  int64(parseUserID(r)),
 			GroupID: 0,
 			Model:   fields.Model,
@@ -229,10 +245,19 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			Stream:  false,
 		})
 		if err != nil {
-			p.logger.Warn("playground chat forward failed", "error", err)
+			logger.Warn("upstream_request_failed",
+				sdk.LogFieldPlatform, platform,
+				sdk.LogFieldModel, fields.Model,
+				sdk.LogFieldError, err,
+			)
 			writeHostForwardError(w, err)
 			return
 		}
+		logger.Debug("upstream_request_completed",
+			sdk.LogFieldPlatform, platform,
+			sdk.LogFieldModel, fields.Model,
+			sdk.LogFieldStatus, resp.StatusCode,
+		)
 		copyHeaders(w.Header(), resp.Headers)
 		if w.Header().Get("Content-Type") == "" {
 			w.Header().Set("Content-Type", "application/json")
@@ -248,7 +273,7 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	headers.Set("Accept", "text/event-stream")
 
 	committed := false
-	err = p.host.ForwardStream(r.Context(), sdk.HostForwardRequest{
+	err = p.host.ForwardStream(ctx, sdk.HostForwardRequest{
 		UserID:  int64(parseUserID(r)),
 		GroupID: 0,
 		Model:   fields.Model,
@@ -284,16 +309,36 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		p.logger.Warn("playground chat forward failed", "error", err)
+		logger.Warn("upstream_request_failed",
+			sdk.LogFieldPlatform, platform,
+			sdk.LogFieldModel, fields.Model,
+			"stream", true,
+			sdk.LogFieldError, err,
+		)
 		if !committed {
 			writeHostForwardError(w, err)
 			return
 		}
 		_, _ = w.Write([]byte("data: {\"error\":{\"message\":\"请求暂时无法完成，请稍后重试\",\"type\":\"server_error\",\"code\":\"upstream_error\"}}\n\n"))
+		return
 	}
+	logger.Debug("upstream_request_completed",
+		sdk.LogFieldPlatform, platform,
+		sdk.LogFieldModel, fields.Model,
+		"stream", true,
+	)
 }
 
 func (p *Plugin) handleImageEdits(w http.ResponseWriter, r *http.Request) {
+	rid := sdk.ExtractOrGenerateRequestID(r.Header)
+	ctx := sdk.WithRequestID(r.Context(), rid)
+	ctx, logger := sdk.LoggerWithRequestID(ctx)
+	logger.Debug("playground_request_received",
+		sdk.LogFieldMethod, r.Method,
+		sdk.LogFieldPath, r.URL.Path,
+		sdk.LogFieldUserID, parseUserID(r),
+	)
+
 	platform := strings.TrimSpace(r.Header.Get("X-Airgate-Platform"))
 	if platform == "" {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "platform required")
@@ -322,7 +367,12 @@ func (p *Plugin) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	headers.Set("Accept", "application/json")
 	headers.Set("X-Airgate-Platform", platform)
 
-	resp, err := p.host.Forward(r.Context(), sdk.HostForwardRequest{
+	logger.Debug("upstream_request_start",
+		sdk.LogFieldPlatform, platform,
+		sdk.LogFieldModel, model,
+		sdk.LogFieldPath, "/v1/images/edits",
+	)
+	resp, err := p.host.Forward(ctx, sdk.HostForwardRequest{
 		UserID:  int64(parseUserID(r)),
 		GroupID: 0,
 		Model:   model,
@@ -333,10 +383,19 @@ func (p *Plugin) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 		Stream:  false,
 	})
 	if err != nil {
-		p.logger.Warn("playground images edits forward failed", "error", err)
+		logger.Warn("upstream_request_failed",
+			sdk.LogFieldPlatform, platform,
+			sdk.LogFieldModel, model,
+			sdk.LogFieldError, err,
+		)
 		writeHostForwardError(w, err)
 		return
 	}
+	logger.Debug("upstream_request_completed",
+		sdk.LogFieldPlatform, platform,
+		sdk.LogFieldModel, model,
+		sdk.LogFieldStatus, resp.StatusCode,
+	)
 
 	copyHeaders(w.Header(), resp.Headers)
 	if w.Header().Get("Content-Type") == "" {
