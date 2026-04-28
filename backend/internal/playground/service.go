@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	sdk "github.com/DouDOU-start/airgate-sdk"
@@ -14,13 +15,15 @@ type ServiceOptions struct {
 	DefaultGroupID     int
 	MaxConversations   int
 	MaxContextMessages int
+	Storage            *ObjectStorage
 }
 
 type Service struct {
-	logger *slog.Logger
-	db     *sql.DB
-	host   sdk.Host
-	opts   ServiceOptions
+	logger  *slog.Logger
+	db      *sql.DB
+	host    sdk.Host
+	opts    ServiceOptions
+	storage *ObjectStorage
 }
 
 func NewService(logger *slog.Logger, db *sql.DB, host sdk.Host, opts ServiceOptions) *Service {
@@ -30,7 +33,7 @@ func NewService(logger *slog.Logger, db *sql.DB, host sdk.Host, opts ServiceOpti
 	if opts.MaxContextMessages <= 0 {
 		opts.MaxContextMessages = 50
 	}
-	return &Service{logger: logger, db: db, host: host, opts: opts}
+	return &Service{logger: logger, db: db, host: host, opts: opts, storage: opts.Storage}
 }
 
 // ── Conversation CRUD ──
@@ -146,6 +149,11 @@ func (s *Service) ListMessages(ctx context.Context, userID int, convID int64) ([
 		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.Reasoning, &m.ReasoningEffort, &m.Platform, &m.Model, &m.GroupID, &m.InputTokens, &m.OutputTokens, &m.Cost, &m.CreatedAt); err != nil {
 			return nil, err
 		}
+		if resolved, err := s.resolveAssetURLs(ctx, userID, m.Content); err != nil {
+			s.logger.Warn("failed to resolve message assets", "error", err, "message_id", m.ID)
+		} else {
+			m.Content = resolved
+		}
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()
@@ -224,9 +232,19 @@ func (s *Service) PersistMessage(ctx context.Context, userID int, req PersistMes
 		model = conv.Model
 	}
 
-	msg, err := s.saveMessage(ctx, conv.ID, req.Role, req.Content, req.Reasoning, req.ReasoningEffort, platform, model, groupID, req.InputTokens, req.OutputTokens, req.Cost)
+	content, err := s.storeContentAssets(ctx, userID, conv.ID, req.Content)
+	if err != nil {
+		return nil, fmt.Errorf("store message assets: %w", err)
+	}
+
+	msg, err := s.saveMessage(ctx, conv.ID, req.Role, content, req.Reasoning, req.ReasoningEffort, platform, model, groupID, req.InputTokens, req.OutputTokens, req.Cost)
 	if err != nil {
 		return nil, fmt.Errorf("save message: %w", err)
+	}
+	if resolved, err := s.resolveAssetURLs(ctx, userID, msg.Content); err != nil {
+		s.logger.Warn("failed to resolve persisted message assets", "error", err, "message_id", msg.ID)
+	} else {
+		msg.Content = resolved
 	}
 
 	if conv.Title == "" && req.Role == "assistant" {
@@ -241,6 +259,74 @@ func (s *Service) PersistMessage(ctx context.Context, userID int, req PersistMes
 	}
 
 	return msg, nil
+}
+
+func (s *Service) storeContentAssets(ctx context.Context, userID int, convID int64, content string) (string, error) {
+	if s.storage == nil || !strings.Contains(content, "data:image/") {
+		return content, nil
+	}
+	var firstErr error
+	stored := dataImageURLRE.ReplaceAllStringFunc(content, func(dataURL string) string {
+		asset, err := s.storage.StoreImageDataURL(ctx, userID, convID, dataURL)
+		if err != nil {
+			firstErr = err
+			return dataURL
+		}
+		if err := s.insertAsset(ctx, userID, convID, asset); err != nil {
+			firstErr = err
+			return dataURL
+		}
+		return assetURI(asset.ID)
+	})
+	if firstErr != nil {
+		return "", firstErr
+	}
+	return stored, nil
+}
+
+func (s *Service) insertAsset(ctx context.Context, userID int, convID int64, asset *StoredAsset) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO playground_assets (id, user_id, conversation_id, object_key, content_type, size_bytes)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		asset.ID, userID, convID, asset.ObjectKey, asset.ContentType, asset.SizeBytes,
+	)
+	return err
+}
+
+func (s *Service) resolveAssetURLs(ctx context.Context, userID int, content string) (string, error) {
+	if s.storage == nil || !strings.Contains(content, "airgate-asset://") {
+		return content, nil
+	}
+	var firstErr error
+	assetLinkRE := regexp.MustCompile(`airgate-asset://asset/[A-Za-z0-9]+`)
+	resolved := assetLinkRE.ReplaceAllStringFunc(content, func(raw string) string {
+		id, ok := parseAssetURI(raw)
+		if !ok {
+			return raw
+		}
+		asset, err := s.getAsset(ctx, userID, id)
+		if err != nil {
+			firstErr = err
+			return raw
+		}
+		publicURL, err := s.storage.PublicURL(ctx, asset.ObjectKey)
+		if err != nil {
+			firstErr = err
+			return raw
+		}
+		return publicURL
+	})
+	return resolved, firstErr
+}
+
+func (s *Service) getAsset(ctx context.Context, userID int, id string) (*Asset, error) {
+	asset := &Asset{}
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, user_id, conversation_id, object_key, content_type, size_bytes, created_at
+		 FROM playground_assets
+		 WHERE id = $1 AND user_id = $2`, id, userID,
+	).Scan(&asset.ID, &asset.UserID, &asset.ConversationID, &asset.ObjectKey, &asset.ContentType, &asset.SizeBytes, &asset.CreatedAt)
+	return asset, err
 }
 
 func (s *Service) latestUserMessageContent(ctx context.Context, convID int64) (string, error) {

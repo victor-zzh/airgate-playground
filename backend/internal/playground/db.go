@@ -34,6 +34,16 @@ type Message struct {
 	CreatedAt       time.Time `json:"created_at"`
 }
 
+type Asset struct {
+	ID             string
+	UserID         int
+	ConversationID int64
+	ObjectKey      string
+	ContentType    string
+	SizeBytes      int64
+	CreatedAt      time.Time
+}
+
 func migrate(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS playground_conversations (
@@ -54,8 +64,8 @@ func migrate(db *sql.DB) error {
 			conversation_id BIGINT NOT NULL REFERENCES playground_conversations(id) ON DELETE CASCADE,
 			role            TEXT NOT NULL,
 			content         TEXT NOT NULL DEFAULT '',
-				reasoning       TEXT NOT NULL DEFAULT '',
-				reasoning_effort TEXT NOT NULL DEFAULT '',
+			reasoning       TEXT NOT NULL DEFAULT '',
+			reasoning_effort TEXT NOT NULL DEFAULT '',
 			platform        TEXT NOT NULL DEFAULT '',
 			model           TEXT NOT NULL DEFAULT '',
 			group_id        BIGINT NOT NULL DEFAULT 0,
@@ -68,7 +78,20 @@ func migrate(db *sql.DB) error {
 		ALTER TABLE playground_messages ADD COLUMN IF NOT EXISTS reasoning TEXT NOT NULL DEFAULT '';
 		ALTER TABLE playground_messages ADD COLUMN IF NOT EXISTS reasoning_effort TEXT NOT NULL DEFAULT '';
 
-			CREATE INDEX IF NOT EXISTS idx_playground_msg_conv ON playground_messages(conversation_id, created_at);
+		CREATE INDEX IF NOT EXISTS idx_playground_msg_conv ON playground_messages(conversation_id, created_at);
+
+		CREATE TABLE IF NOT EXISTS playground_assets (
+			id              TEXT PRIMARY KEY,
+			user_id         INTEGER NOT NULL,
+			conversation_id BIGINT NOT NULL DEFAULT 0,
+			object_key      TEXT NOT NULL,
+			content_type    TEXT NOT NULL,
+			size_bytes      BIGINT NOT NULL DEFAULT 0,
+			created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_playground_assets_user ON playground_assets(user_id, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_playground_assets_conv ON playground_assets(conversation_id, created_at DESC);
 	`)
 	return err
 }

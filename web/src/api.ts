@@ -276,6 +276,10 @@ export async function chatCompletion(
     messages: Array<{ role: string; content: ChatMessageContent }>;
     stream?: false;
     response_format?: { type: 'json_object' };
+    // size 透传给 OpenAI 网关的 chat→images 兼容路径
+    // (airgate buildChatCompatImagePayload 直接 gjson 读这个字段)。
+    // OpenAI 原生 Chat Completions 不识别此字段；非 image 模型上游会忽略。
+    size?: string;
   },
   signal?: AbortSignal,
 ): Promise<ChatCompletionResponse> {

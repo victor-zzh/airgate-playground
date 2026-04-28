@@ -5,6 +5,12 @@ import 'katex/dist/katex.min.css';
 import { cssVar } from '@airgate/theme';
 import { api, chatCompletion, chatCompletionsStream, editImage as requestImageEdit } from './api';
 import type { ChatMessageContent, Conversation, ImageEditResponse, Message, ModelInfo, PlatformInfo, ReasoningEffort, UserInfo } from './api';
+import ImageStudioPage from './ImageStudioPage';
+
+const STUDIO_MODE_STORAGE_KEY = 'airgate.playground.studioMode';
+// Feature flag — Image Studio is finished but hidden until we decide on persistence
+// (see ImageStudioPage.tsx). Flip to true to expose the entry points again.
+const IMAGE_STUDIO_ENABLED = false;
 
 declare global {
   interface Window {
@@ -16,9 +22,12 @@ declare global {
 
 const MOBILE_BREAKPOINT = 960;
 const DRAFT_CONVERSATION_ID = -1;
-const IMAGE_MARKDOWN_RE = /!\[[^\]]*\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+)\)/g;
-const IMAGE_MARKDOWN_ITEM_RE = /!\[([^\]]*)\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+)\)/g;
-const IMAGE_MARKDOWN_TEST_RE = /!\[[^\]]*\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+)\)/;
+// 仅匹配 markdown image 里的 base64 部分（data:...；不动 http/blob URL）。
+// 用 [A-Za-z0-9+/=]+ 严格 base64 字符集，避免在大字符串里贪婪匹配出问题。
+const BASE64_DATA_URL_RE = /data:image\/(?:png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+/g;
+const IMAGE_MARKDOWN_RE = /!\[[^\]]*\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+|\/api\/v1\/ext-user\/airgate-playground\/assets\/[^\s)]+|blob:[^\s)]+)\)/g;
+const IMAGE_MARKDOWN_ITEM_RE = /!\[([^\]]*)\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+|\/api\/v1\/ext-user\/airgate-playground\/assets\/[^\s)]+|blob:[^\s)]+)\)/g;
+const IMAGE_MARKDOWN_TEST_RE = /!\[[^\]]*\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+|\/api\/v1\/ext-user\/airgate-playground\/assets\/[^\s)]+|blob:[^\s)]+)\)/;
 const IMAGE_EDIT_ANNOTATION_RE = /<!--airgate:image-edit:([A-Za-z0-9+/=]+)-->/g;
 const DATA_IMAGE_RE = /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i;
 const REASONING_MODEL_RE = /(^|[-_])(?:gpt-?5|o[134]|codex)(?:[-_.]|$)/i;
@@ -30,36 +39,28 @@ const ACTIVE_CONVERSATION_STORAGE_KEY = 'airgate.playground.activeConversationId
 const SELECTED_MODEL_STORAGE_KEY = 'airgate.playground.selectedModel';
 const IMAGE_PROMPT_PLANNER_PLATFORM = 'openai';
 const IMAGE_PROMPT_PLANNER_MODEL = 'gpt-5.4-mini';
-const IMAGE_SIZE_ALIGNMENT = 16;
-const MAX_IMAGE_EDGE = 3840;
 const MAX_IMAGE_SHOTS = 4;
-const BASE_RESOLUTION_OPTIONS: Array<{ value: BaseResolution; label: string }> = [
-  { value: 1024, label: '1K' },
-  { value: 2048, label: '2K' },
-  { value: 3840, label: '4K' },
-];
-const IMAGE_RATIO_OPTIONS: Array<{ value: ImageRatio; label: string }> = [
-  { value: '1:1', label: '1:1' },
-  { value: '3:2', label: '3:2' },
-  { value: '2:3', label: '2:3' },
-  { value: '16:9', label: '16:9' },
-  { value: '9:16', label: '9:16' },
-  { value: '4:3', label: '4:3' },
-  { value: '3:4', label: '3:4' },
-  { value: '21:9', label: '21:9' },
+// 选项遵循 codex imagegen SKILL 推荐。`auto` 是默认值，提交时 resolveImageSize
+// 返回 undefined → 上游侧不带 size 字段，让 image_generation 工具自己挑。
+// 其它 5 个固定值都满足 gpt-image-2 硬约束（边长≤3840、16 倍数、≤3:1、像素 ∈[655360,8294400]），
+// 不会被网关侧 validateImageSize 挡掉。
+const IMAGE_SIZE_AUTO = 'auto';
+const IMAGE_SIZE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: IMAGE_SIZE_AUTO, label: 'Auto' },
+  { value: '1024x1024', label: '1024×1024 (1K)' },
+  { value: '1536x1024', label: '1536×1024 (1K)' },
+  { value: '1024x1536', label: '1024×1536 (1K)' },
+  { value: '2048x2048', label: '2048×2048 (2K)' },
+  { value: '2048x1152', label: '2048×1152 (2K)' },
+  { value: '1152x2048', label: '1152×2048 (2K)' },
+  { value: '3840x2160', label: '3840×2160 (4K)' },
+  { value: '2160x3840', label: '2160×3840 (4K)' },
 ];
 const DEFAULT_IMAGE_SIZE_SETTINGS: ImageSizeSettings = {
-  mode: 'auto',
-  baseResolution: 1024,
-  ratio: '1:1',
+  value: IMAGE_SIZE_AUTO,
 };
-type ImageSizeMode = 'auto' | 'ratio';
-type BaseResolution = 1024 | 2048 | 3840;
-type ImageRatio = '1:1' | '3:2' | '2:3' | '16:9' | '9:16' | '4:3' | '3:4' | '21:9';
 type ImageSizeSettings = {
-  mode: ImageSizeMode;
-  baseResolution: BaseResolution;
-  ratio: ImageRatio;
+  value: string;
 };
 type SelectOption = { value: string; label: string };
 type PendingImage = { id: string; name: string; url: string };
@@ -94,6 +95,51 @@ function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+// BlobUrlRegistry 维护「blob URL ↔ 原 base64」的反向映射。
+// 4K 图片的 base64 (~6-20 MB) 直接进 React state 会让每次 re-render 拷贝大字符串
+// 卡顿；改成在收到 base64 时立即转 Blob，用 URL.createObjectURL 拿到短 blob URL
+// (~50 字节) 替换写入 state，渲染走 <img src="blob:..."> 浏览器只解码一次。
+// 持久化到后端时再用 registry 反查回原 base64（后端存的是真图，不是 blob 引用）。
+type BlobUrlRegistry = Map<string, string>;
+
+function dataUrlToBlob(dataUrl: string): Blob | null {
+  const commaIdx = dataUrl.indexOf(',');
+  if (commaIdx < 0) return null;
+  const meta = dataUrl.slice(5, commaIdx); // 去掉 "data:" 前缀
+  const mimeMatch = /^([^;]+)/.exec(meta);
+  const mime = mimeMatch?.[1] || 'application/octet-stream';
+  const b64 = dataUrl.slice(commaIdx + 1);
+  try {
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  } catch {
+    return null;
+  }
+}
+
+function replaceBase64WithBlobUrls(content: string, registry: BlobUrlRegistry): string {
+  if (!content || !content.includes('data:image/')) return content;
+  return content.replace(BASE64_DATA_URL_RE, (dataUrl) => {
+    const blob = dataUrlToBlob(dataUrl);
+    if (!blob) return dataUrl; // 解码失败保留原值，避免显示空白
+    const url = URL.createObjectURL(blob);
+    registry.set(url, dataUrl);
+    return url;
+  });
+}
+
+function replaceBlobUrlsWithBase64(content: string, registry: BlobUrlRegistry): string {
+  if (!content || !content.includes('blob:')) return content;
+  return content.replace(/blob:[^\s)"']+/g, (url) => registry.get(url) || url);
+}
+
+function revokeBlobRegistry(registry: BlobUrlRegistry) {
+  registry.forEach((_, url) => URL.revokeObjectURL(url));
+  registry.clear();
+}
+
 function selectionRectFromPoints(start: { x: number; y: number }, end: { x: number; y: number }): EditSelectionRect {
   const x = Math.min(start.x, end.x);
   const y = Math.min(start.y, end.y);
@@ -109,52 +155,14 @@ function isUsableSelection(rect: EditSelectionRect | null) {
   return Boolean(rect && rect.width >= MIN_SELECTION_SIZE && rect.height >= MIN_SELECTION_SIZE);
 }
 
-function cloneImageSizeSettings(settings: ImageSizeSettings): ImageSizeSettings {
-  return { ...settings };
-}
-
-function parseRatioValue(value: string) {
-  const [w, h] = value.split(':').map(part => Number.parseInt(part, 10));
-  return w > 0 && h > 0 ? { width: w, height: h } : null;
-}
-
-function alignImageDimension(value: number) {
-  return Math.max(IMAGE_SIZE_ALIGNMENT, Math.floor(value / IMAGE_SIZE_ALIGNMENT) * IMAGE_SIZE_ALIGNMENT);
-}
-
-function clampImageSize(width: number, height: number) {
-  if (width <= MAX_IMAGE_EDGE && height <= MAX_IMAGE_EDGE) return { width, height };
-  if (width >= height) {
-    return { width: MAX_IMAGE_EDGE, height: alignImageDimension(height * MAX_IMAGE_EDGE / width) };
-  }
-  return { width: alignImageDimension(width * MAX_IMAGE_EDGE / height), height: MAX_IMAGE_EDGE };
-}
-
-function formatImageSize(width: number, height: number) {
-  const clamped = clampImageSize(alignImageDimension(width), alignImageDimension(height));
-  return `${clamped.width}x${clamped.height}`;
-}
-
-function resolveImageRatio(settings: ImageSizeSettings) {
-  return parseRatioValue(settings.ratio);
-}
-
+// 'auto' → undefined 让上游 image_generation 工具按默认（gpt-image-2 → 1024×1024）出图；
+// 其它值都已在 IMAGE_SIZE_OPTIONS 里预校验过 gpt-image-2 硬约束。
 function resolveImageSize(settings: ImageSizeSettings) {
-  if (settings.mode === 'auto') return undefined;
-
-  const ratio = resolveImageRatio(settings);
-  if (!ratio) return undefined;
-  const base = settings.baseResolution;
-  if (ratio.width === ratio.height) return formatImageSize(base, base);
-  if (ratio.width > ratio.height) {
-    return formatImageSize(base, base * ratio.height / ratio.width);
-  }
-  return formatImageSize(base * ratio.width / ratio.height, base);
+  return settings.value === IMAGE_SIZE_AUTO ? undefined : settings.value;
 }
 
 function imageSizeSummary(settings: ImageSizeSettings) {
-  if (settings.mode === 'auto') return 'Auto';
-  return resolveImageSize(settings) || 'Invalid size';
+  return settings.value === IMAGE_SIZE_AUTO ? 'Auto' : settings.value;
 }
 
 function stripImageEditAnnotations(content: string) {
@@ -352,6 +360,21 @@ async function editImageFromFile(file: File): Promise<EditImage> {
   };
 }
 
+async function editImageFromUrl(url: string, alt: string): Promise<EditImage> {
+  let resp: Response;
+  try {
+    resp = await fetch(url, url.startsWith('data:') ? undefined : { credentials: 'omit' });
+  } catch {
+    throw new Error('Failed to fetch image — it may be hosted on a server that blocks cross-origin reads.');
+  }
+  if (!resp.ok) throw new Error(`Failed to fetch image (HTTP ${resp.status})`);
+  const blob = await resp.blob();
+  const type = blob.type && blob.type.startsWith('image/') ? blob.type : `image/${imageExtensionFromUrl(url) === 'jpg' ? 'jpeg' : imageExtensionFromUrl(url)}`;
+  const filename = imageFilename(alt || 'generated-image', url);
+  const file = new File([blob], filename, { type });
+  return editImageFromFile(file);
+}
+
 function generatedImageUrlFromEdit(response: ImageEditResponse) {
   const image = response.data?.[0];
   if (!image) return '';
@@ -502,7 +525,9 @@ function isSafeLinkUrl(url: string) {
 }
 
 function isSafeImageUrl(url: string) {
-  return /^(data:image\/(?:png|jpeg|jpg|webp|gif);base64,|https?:)/i.test(url);
+  // blob: 是同源临时 URL，由 URL.createObjectURL 创建，作为 base64 的内存替身使用——
+  // 与 data: 等价的安全级别。
+  return /^(data:image\/(?:png|jpeg|jpg|webp|gif);base64,|https?:|blob:)/i.test(url);
 }
 
 function pushTextWithBreaks(nodes: ReactNode[], text: string, keyPrefix: string) {
@@ -893,7 +918,7 @@ export default function PlaygroundPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationsLoaded, setConversationsLoaded] = useState(false);
   const [activeId, setActiveId] = useState<number | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessagesRaw] = useState<Message[]>([]);
   const [streamConversationId, setStreamConversationId] = useState<number | null>(null);
   const [streamContent, setStreamContent] = useState('');
   const [streamReasoning, setStreamReasoning] = useState('');
@@ -913,7 +938,7 @@ export default function PlaygroundPage() {
   const [selectedModel, setSelectedModel] = useState('');
   const [openSelectId, setOpenSelectId] = useState<string | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('medium');
-  const [imageSizeSettings, setImageSizeSettings] = useState<ImageSizeSettings>(() => cloneImageSizeSettings(DEFAULT_IMAGE_SIZE_SETTINGS));
+  const [imageSizeSettings, setImageSizeSettings] = useState<ImageSizeSettings>(() => ({ ...DEFAULT_IMAGE_SIZE_SETTINGS }));
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [error, setError] = useState('');
   const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
@@ -923,6 +948,16 @@ export default function PlaygroundPage() {
   const [isMobile, setIsMobile] = useState(() => (
     typeof window !== 'undefined' ? window.innerWidth <= MOBILE_BREAKPOINT : false
   ));
+  const [studioMode, setStudioMode] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem(STUDIO_MODE_STORAGE_KEY) === '1';
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (studioMode) localStorage.setItem(STUDIO_MODE_STORAGE_KEY, '1');
+    else localStorage.removeItem(STUDIO_MODE_STORAGE_KEY);
+  }, [studioMode]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -938,6 +973,26 @@ export default function PlaygroundPage() {
   // 用户主动点了发送 / 停止 / Enter 后，标记一下；流式结束后把焦点送回 textarea。
   // 否则 textarea 在流式期间 disabled，焦点丢失，用户每次都要重新点输入框，烦死。
   const pendingRefocusRef = useRef(false);
+  // base64 → blob URL 的反向映射，详见 BlobUrlRegistry 注释。
+  // 切对话时全部 revoke（下面 useEffect [activeId] 的 cleanup），unmount 同理。
+  const blobUrlRegistryRef = useRef<BlobUrlRegistry>(new Map());
+
+  // setMessages 包装：所有写入 messages 的内容自动把 base64 data URL 转成 blob URL，
+  // 原 base64 进 registry。这样 messages state 里都是短字符串，React re-render
+  // 不再拷贝 ~10MB 文本。replaceBase64WithBlobUrls 对已是 blob URL 的 content 是 no-op，
+  // 所以 setMessages(prev => prev.map(...)) 这种"操作内部数据"的调用也安全。
+  const setMessages = useCallback<typeof setMessagesRaw>((arg) => {
+    const transform = (msgs: Message[]) =>
+      msgs.map(msg => {
+        if (!msg.content || !msg.content.includes('data:image/')) return msg;
+        return { ...msg, content: replaceBase64WithBlobUrls(msg.content, blobUrlRegistryRef.current) };
+      });
+    if (typeof arg === 'function') {
+      setMessagesRaw(prev => transform(arg(prev)));
+    } else {
+      setMessagesRaw(transform(arg));
+    }
+  }, []);
 
   useEffect(() => {
     if (!isStreaming && !isEditingImage && pendingRefocusRef.current) {
@@ -1010,7 +1065,19 @@ export default function PlaygroundPage() {
       return;
     }
     api.listMessages(activeId).then(setMessages).catch(() => {});
-  }, [activeId]);
+  }, [activeId, setMessages]);
+
+  // blob URL 只在组件 unmount 时统一回收。
+  // 不能跟着 activeId cleanup —— DRAFT → 真实 conv.id 切换会触发 cleanup，把流式
+  // 中间产生的 blob URL 全 revoke 掉，多 shot 后续 finishAssistantResponse 反查
+  // registry 找不到原 base64，结果存了一堆失效 blob: URL 进库，刷新就破图。
+  // 代价：单次 session 旧对话的 blob 不再用但占内存到关页面，几 MB 可接受。
+  useEffect(() => {
+    const registry = blobUrlRegistryRef.current;
+    return () => {
+      revokeBlobRegistry(registry);
+    };
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1058,7 +1125,10 @@ export default function PlaygroundPage() {
       if (cancelled) return;
 
       const maxWidth = container.clientWidth || image.naturalWidth;
-      const maxHeight = isMobile ? 220 : 260;
+      const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
+      const maxHeight = isMobile
+        ? Math.min(viewportHeight * 0.45, 360)
+        : Math.min(viewportHeight * 0.62, 720);
       const scale = Math.min(1, maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
       const width = Math.max(1, Math.round(image.naturalWidth * scale));
       const height = Math.max(1, Math.round(image.naturalHeight * scale));
@@ -1103,7 +1173,6 @@ export default function PlaygroundPage() {
   const selectedModelIsImage = isImageModel(selectedModelInfo);
   const selectedModelSupportsReasoning = supportsReasoning(selectedModelInfo);
   const resolvedImageSize = resolveImageSize(imageSizeSettings);
-  const displayedImageSize = imageSizeSummary(imageSizeSettings);
 
   const selectedPlatform = selectedModelPlatform;
   const modelOptions = models.map(model => ({
@@ -1286,7 +1355,12 @@ export default function PlaygroundPage() {
       let accumulatedReasoning = '';
       const baseRequest = {
         model,
-        messages: requestMessages.map(msg => ({ role: msg.role, content: toChatMessageContent(msg.role, msg.content) })),
+        // user message 可能含 blob URL（参考图被前端转过），上游需要原 base64，
+        // 调 toChatMessageContent 之前先反转。
+        messages: requestMessages.map(msg => ({
+          role: msg.role,
+          content: toChatMessageContent(msg.role, replaceBlobUrlsWithBase64(msg.content, blobUrlRegistryRef.current)),
+        })),
         stream: true as const,
         ...(isImageRequest && imageSize ? { size: imageSize } : {}),
         ...(requestSupportsReasoning ? { reasoning_effort: requestReasoningEffort ?? reasoningEffort } : {}),
@@ -1304,10 +1378,13 @@ export default function PlaygroundPage() {
           setIsStreaming(false);
           return;
         }
+        // accumulated 流式期间已经把 base64 转成 blob URL；后端要存原图，
+        // 在 persistMessage 调用前反查 registry 把 blob URL 还原回 base64。
+        const persistedBase64 = replaceBlobUrlsWithBase64(accumulated, blobUrlRegistryRef.current);
         const persisted = await api.persistMessage({
           conversation_id: conversationID,
           role: 'assistant',
-          content: accumulated,
+          content: persistedBase64,
           reasoning: accumulatedReasoning,
           platform,
           model: usage.model || model,
@@ -1317,7 +1394,10 @@ export default function PlaygroundPage() {
           cost: usage.cost,
         });
         if (activeIdRef.current === conversationID) {
-          setMessages(prev => [...prev, persisted]);
+          // 关键：用 setMessagesRaw（不走包装），content 用流式期间已转好的 accumulated，
+          // 复用同一组 blob URL。否则包装会把 persisted.content 的 base64 再次转新
+          // blob URL，旧的 accumulated 那批就泄漏在 registry 里了。
+          setMessagesRaw(prev => [...prev, { ...persisted, content: accumulated }]);
         }
         setRetryRequest(null);
         if (titleContent) {
@@ -1394,13 +1474,18 @@ export default function PlaygroundPage() {
               ...baseRequest,
               messages: imageShotRequestMessages(requestMessages, prompt).map(msg => ({
                 role: msg.role,
-                content: toChatMessageContent(msg.role, msg.content),
+                // user message 可能含 blob URL（参考图被前端转过），上游需要原 base64，
+                // 调 toChatMessageContent 之前先反转。assistant message 在 stripImageMarkdown
+                // 时图片已被剥掉，反转一次也无害（幂等）。
+                content: toChatMessageContent(msg.role, replaceBlobUrlsWithBase64(msg.content, blobUrlRegistryRef.current)),
               })),
               n: 1,
             },
             {
               onData: (text) => {
-                localContent += text;
+                // 同 L1500 的注释：流式 chunk 里的 base64 立刻转 blob URL，
+                // 否则 localContent / accumulated 的大字符串会拖慢 React state。
+                localContent += replaceBase64WithBlobUrls(text, blobUrlRegistryRef.current);
                 if (messageHasGeneratedImage(localContent)) appendLocalContent();
               },
               onReasoning: (text) => {
@@ -1445,7 +1530,9 @@ export default function PlaygroundPage() {
         },
         {
           onData: (text) => {
-            accumulated += text;
+            // 4K 图：text 一帧可能含 ~6-20 MB base64 markdown，先转 blob URL 再累加，
+            // 否则 accumulated 含大字符串 → 每次 setStreamContent 都 React state 拷贝，卡爆。
+            accumulated += replaceBase64WithBlobUrls(text, blobUrlRegistryRef.current);
             setStreamContent(accumulated);
           },
           onReasoning: (text) => {
@@ -1615,6 +1702,47 @@ export default function PlaygroundPage() {
     e.target.value = '';
   }, [selectEditImage]);
 
+  const editGeneratedImage = useCallback(async (
+    url: string,
+    alt: string,
+    sourceModel?: string,
+    sourcePlatform?: string,
+  ) => {
+    if (isStreaming) return;
+    try {
+      const nextSource = await editImageFromUrl(url, alt);
+
+      // Ensure an image-only model is selected so the edit panel renders and submit is enabled.
+      if (!selectedModelIsImage) {
+        const fromAssistant = sourceModel
+          ? models.find(m => m.id === sourceModel
+              && (!sourcePlatform || m.platform === sourcePlatform)
+              && isImageModel(m))
+          : undefined;
+        const fallback = fromAssistant || models.find(isImageModel);
+        if (fallback) {
+          setSelectedModel(modelOptionValue(fallback));
+        } else {
+          setError(t('playground.no_image_model_available', {
+            defaultValue: 'No image model available — pick one to edit this image.',
+          }));
+          return;
+        }
+      }
+
+      setEditSource(nextSource);
+      setIsEditPanelOpen(true);
+      setEditSelection(null);
+      setDraftEditSelection(null);
+      setEditStageSize(null);
+      setError('');
+      setRetryRequest(null);
+      pendingRefocusRef.current = true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load image');
+    }
+  }, [isStreaming, models, selectedModelIsImage, t]);
+
   const triggerEditImagePicker = useCallback(() => {
     editFileInputRef.current?.click();
   }, []);
@@ -1633,6 +1761,15 @@ export default function PlaygroundPage() {
     setEditStageSize(null);
     selectionStartRef.current = null;
   }, []);
+
+  useEffect(() => {
+    if (!isEditPanelOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeEditPanel();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isEditPanelOpen, closeEditPanel]);
 
   const selectionPointFromEvent = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = editCanvasRef.current;
@@ -1718,11 +1855,6 @@ export default function PlaygroundPage() {
       setError(t('playground.choose_source_image_first'));
       return;
     }
-    if (!editSelection) {
-      setRetryRequest(null);
-      setError(t('playground.select_edit_area_first'));
-      return;
-    }
 
     const prompt = input.trim();
     if (!prompt) {
@@ -1734,7 +1866,7 @@ export default function PlaygroundPage() {
     const groupID = resolveGroupID();
     let conversationID = activeId;
     const canvas = editCanvasRef.current;
-    const editAnnotation = canvas ? {
+    const editAnnotation = canvas && editSelection ? {
       imageIndex: 0,
       rect: {
         x: editSelection.x / canvas.width,
@@ -1804,14 +1936,14 @@ export default function PlaygroundPage() {
 
       const abort = new AbortController();
       abortRef.current = abort;
-      const maskBlob = await createEditMaskBlob();
+      const maskBlob = editSelection ? await createEditMaskBlob() : null;
       if (abort.signal.aborted) return;
 
       const form = new FormData();
       form.append('model', selectedModelID);
       form.append('prompt', prompt);
       form.append('image', editSource.file, editSource.name || 'image.png');
-      form.append('mask', maskBlob, 'mask.png');
+      if (maskBlob) form.append('mask', maskBlob, 'mask.png');
       if (resolvedImageSize) form.append('size', resolvedImageSize);
 
       const response = await requestImageEdit(selectedPlatform, form, abort.signal);
@@ -1904,7 +2036,7 @@ export default function PlaygroundPage() {
   const activeConv = conversations.find(c => c.id === activeId);
   const lastMessage = messages[messages.length - 1];
   const visibleEditSelection = draftEditSelection || editSelection;
-  const isImageEditReady = Boolean(isEditPanelOpen && editSource && editSelection && input.trim() && selectedPlatform && selectedModelID && selectedModelIsImage);
+  const isImageEditReady = Boolean(isEditPanelOpen && editSource && input.trim() && selectedPlatform && selectedModelID && selectedModelIsImage);
   const hasRecoverableUserMessage = Boolean(activeId && activeId !== DRAFT_CONVERSATION_ID && lastMessage?.role === 'user' && !error && !isStreaming);
   const isActiveConversationStreaming = isStreaming && streamConversationId === activeId;
   const canSendMessage = Boolean((isEditPanelOpen ? isImageEditReady : (input.trim() || pendingImages.length > 0)) && selectedPlatform && selectedModelID) && !isStreaming && !isEditingImage;
@@ -2090,6 +2222,16 @@ export default function PlaygroundPage() {
     );
   };
 
+  if (IMAGE_STUDIO_ENABLED && studioMode) {
+    return (
+      <ImageStudioPage
+        onExit={() => setStudioMode(false)}
+        userInfo={userInfo}
+        onUserInfoChange={setUserInfo}
+      />
+    );
+  }
+
   return (
     <div data-full-bleed data-pg-aesthetic style={styles.layout}>
       {sidebarOpen && isMobile && (
@@ -2121,6 +2263,177 @@ export default function PlaygroundPage() {
         </div>
       )}
 
+      {selectedModelIsImage && isEditPanelOpen && (
+        <div
+          style={styles.editModalOverlay}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('playground.edit_image_region')}
+          onClick={closeEditPanel}
+        >
+          <div
+            style={{ ...styles.editModalCard, ...(isMobile ? styles.editModalCardMobile : null) }}
+            onClick={event => event.stopPropagation()}
+          >
+            <div style={styles.editModalHeader}>
+              <div style={styles.imageEditTitleWrap}>
+                <span style={styles.imageEditTitle}>{t('playground.edit_image_region')}</span>
+                <span style={styles.imageEditSubtitle}>
+                  {editSource
+                    ? t('playground.edit_image_modal_hint', { defaultValue: 'Drag a region for localized edits, or just describe the change for a full-image edit.' })
+                    : t('playground.choose_source_image_region_hint')}
+                </span>
+              </div>
+              <div style={styles.imageEditHeaderActions}>
+                <button
+                  type="button"
+                  style={styles.imageEditGhostBtn}
+                  onClick={triggerEditImagePicker}
+                  disabled={isActiveConversationStreaming}
+                >
+                  {editSource ? t('playground.replace_source') : t('playground.choose_source')}
+                </button>
+                <button
+                  type="button"
+                  style={styles.imageEditIconBtn}
+                  onClick={closeEditPanel}
+                  aria-label={t('playground.close_image_preview', { defaultValue: 'Close' })}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            {editSource ? (
+              <div style={{ ...styles.editModalBody, ...(isMobile ? styles.editModalBodyMobile : null) }}>
+                <div ref={editCanvasContainerRef} style={styles.editModalStageWrap}>
+                  <div style={{
+                    ...styles.imageEditStage,
+                    ...(editStageSize ? { width: editStageSize.width, height: editStageSize.height } : null),
+                  }}>
+                    <img src={editSource.url} alt={editSource.name} style={styles.imageEditSource} draggable={false} />
+                    {visibleEditSelection && (
+                      <div
+                        style={{
+                          ...styles.imageEditSelection,
+                          left: visibleEditSelection.x,
+                          top: visibleEditSelection.y,
+                          width: visibleEditSelection.width,
+                          height: visibleEditSelection.height,
+                        }}
+                      />
+                    )}
+                    <canvas
+                      ref={editCanvasRef}
+                      style={styles.imageEditCanvas}
+                      onPointerDown={handleSelectionPointerDown}
+                      onPointerMove={handleSelectionPointerMove}
+                      onPointerUp={finishSelectionDrag}
+                      onPointerCancel={finishSelectionDrag}
+                      aria-label="Box-select image edit region"
+                    />
+                  </div>
+                </div>
+                <div style={styles.editModalSide}>
+                  <div style={styles.imageEditBadge}>
+                    {editSelection ? t('playground.region_selected') : t('playground.drag_to_select')}
+                  </div>
+                  <div style={styles.imageEditFilename}>{editSource.name}</div>
+                  <button
+                    type="button"
+                    style={{ ...styles.imageEditGhostBtn, opacity: editSelection ? 1 : 0.5 }}
+                    onClick={clearEditSelection}
+                    disabled={!editSelection || isActiveConversationStreaming}
+                  >
+                    {t('playground.clear_selection')}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                style={styles.imageEditEmptyBtn}
+                onClick={triggerEditImagePicker}
+                disabled={isActiveConversationStreaming}
+              >
+                {t('playground.choose_source_image_for_regional_editing')}
+              </button>
+            )}
+
+            <div style={styles.editModalFooter}>
+              {isActiveConversationStreaming && (
+                <div style={styles.editModalStatus}>
+                  <span style={styles.streamingDot} />
+                  <span>{t('playground.edit_modal_generating_bg', { defaultValue: 'Generating edit — this can take 10–30 seconds. You can close this dialog; the result will appear in chat when ready.' })}</span>
+                </div>
+              )}
+              {error && !isActiveConversationStreaming && (
+                <div style={styles.editModalError}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M12 8v4m0 4h.01" />
+                  </svg>
+                  <span>{error}</span>
+                </div>
+              )}
+              <textarea
+                style={styles.editModalPrompt}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={t('playground.edit_prompt_placeholder', { defaultValue: 'Describe the change you want — e.g. "make the sky overcast" or "remove the person on the left".' })}
+                rows={3}
+                disabled={isActiveConversationStreaming}
+                autoFocus
+              />
+              <div style={styles.editModalActions}>
+                <span style={styles.editModalHint}>
+                  {editSelection
+                    ? t('playground.edit_modal_region_hint', { defaultValue: 'Region edit · only the selected area will change' })
+                    : t('playground.edit_modal_full_hint', { defaultValue: 'Full-image edit · drag a region above for localized edits' })}
+                </span>
+                <div style={styles.editModalBtnGroup}>
+                  <button
+                    type="button"
+                    style={styles.imageEditGhostBtn}
+                    onClick={closeEditPanel}
+                  >
+                    {isActiveConversationStreaming
+                      ? t('playground.edit_modal_run_in_background', { defaultValue: 'Run in background' })
+                      : t('playground.cancel', { defaultValue: 'Cancel' })}
+                  </button>
+                  {isActiveConversationStreaming ? (
+                    <button
+                      type="button"
+                      style={styles.editModalSubmitBtn}
+                      onClick={stopStreaming}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                        <rect x="2" y="2" width="8" height="8" rx="1" />
+                      </svg>
+                      {t('playground.stop')}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      style={{ ...styles.editModalSubmitBtn, opacity: isImageEditReady ? 1 : 0.4 }}
+                      onClick={() => void submitImageEdit()}
+                      disabled={!isImageEditReady}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M22 2L11 13" />
+                        <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                      </svg>
+                      {t('playground.edit_modal_submit', { defaultValue: 'Generate edit' })}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Sidebar ── */}
       {sidebarOpen ? (
         <div style={{ ...styles.sidebar, ...(isMobile ? styles.sidebarMobile : null) }}>
@@ -2144,6 +2457,34 @@ export default function PlaygroundPage() {
               </svg>
             </button>
           </div>
+
+          {IMAGE_STUDIO_ENABLED && (
+            <div style={styles.modeSwitcher}>
+              <button
+                type="button"
+                style={{ ...styles.modeSwitcherItem, ...styles.modeSwitcherItemActive }}
+                aria-pressed={true}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+                <span>{t('playground.mode_chat', { defaultValue: 'Chat' })}</span>
+              </button>
+              <button
+                type="button"
+                style={styles.modeSwitcherItem}
+                onClick={() => setStudioMode(true)}
+                title={t('playground.mode_studio_hint', { defaultValue: 'Open Image Studio' })}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <path d="M21 15l-5-5L5 21" />
+                </svg>
+                <span>{t('playground.mode_studio', { defaultValue: 'Studio' })}</span>
+              </button>
+            </div>
+          )}
 
           <div style={styles.convList}>
             {conversations.map(c => {
@@ -2205,6 +2546,20 @@ export default function PlaygroundPage() {
               <path d="M6 2v12" /><path d="M2 2h12v12H2z" /><path d="M8 6l2 2-2 2" />
             </svg>
           </button>
+          {IMAGE_STUDIO_ENABLED && (
+          <button
+            style={{ ...styles.toggleBtn, marginTop: 4 }}
+            onClick={() => setStudioMode(true)}
+            aria-label={t('playground.mode_studio_hint', { defaultValue: 'Open Image Studio' })}
+            title={t('playground.mode_studio_hint', { defaultValue: 'Open Image Studio' })}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" />
+              <path d="M21 15l-5-5L5 21" />
+            </svg>
+          </button>
+          )}
         </div>
       )}
 
@@ -2262,6 +2617,21 @@ export default function PlaygroundPage() {
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                             <path d="M7 10l5 5 5-5" />
                             <path d="M12 15V3" />
+                          </svg>
+                        </button>
+                      )}
+                      {generatedImage && (
+                        <button
+                          type="button"
+                          style={{ ...styles.regenerateImageBtn, opacity: isStreaming ? 0.5 : 1 }}
+                          onClick={() => editGeneratedImage(generatedImage.url, generatedImage.alt || t('playground.generated_image'), msg.model, msg.platform)}
+                          disabled={isStreaming}
+                          title={t('playground.edit_generated_image', { defaultValue: 'Edit this image' })}
+                          aria-label={t('playground.edit_generated_image', { defaultValue: 'Edit this image' })}
+                        >
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 20h9" />
+                            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
                           </svg>
                         </button>
                       )}
@@ -2411,90 +2781,6 @@ export default function PlaygroundPage() {
               ...(isMobile ? styles.inputWrapperMobile : null),
               ...(isActiveConversationStreaming ? styles.inputWrapperStreaming : null),
             }}>
-              {selectedModelIsImage && isEditPanelOpen && (
-                <div style={{ ...styles.imageEditPanel, ...(isMobile ? styles.imageEditPanelMobile : null) }}>
-                  <div style={{ ...styles.imageEditHeader, ...(isMobile ? styles.imageEditHeaderMobile : null) }}>
-                    <div style={styles.imageEditTitleWrap}>
-                      <span style={styles.imageEditTitle}>{t('playground.edit_image_region')}</span>
-                      <span style={styles.imageEditSubtitle}>{editSource ? t('playground.edit_image_region_hint') : t('playground.choose_source_image_region_hint')}</span>
-                    </div>
-                    <div style={styles.imageEditHeaderActions}>
-                      <button
-                        type="button"
-                        style={styles.imageEditGhostBtn}
-                        onClick={triggerEditImagePicker}
-                        disabled={isActiveConversationStreaming}
-                      >
-                        {editSource ? t('playground.replace_source') : t('playground.choose_source')}
-                      </button>
-                      <button
-                        type="button"
-                        style={styles.imageEditIconBtn}
-                        onClick={closeEditPanel}
-                        disabled={isActiveConversationStreaming}
-                        aria-label="Close image editor"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-
-                  {editSource ? (
-                    <div style={{ ...styles.imageEditBody, ...(isMobile ? styles.imageEditBodyMobile : null) }}>
-                      <div ref={editCanvasContainerRef} style={styles.imageEditStageWrap}>
-                        <div style={{
-                          ...styles.imageEditStage,
-                          ...(editStageSize ? { width: editStageSize.width, height: editStageSize.height } : null),
-                        }}>
-                          <img src={editSource.url} alt={editSource.name} style={styles.imageEditSource} draggable={false} />
-                          {visibleEditSelection && (
-                            <div
-                              style={{
-                                ...styles.imageEditSelection,
-                                left: visibleEditSelection.x,
-                                top: visibleEditSelection.y,
-                                width: visibleEditSelection.width,
-                                height: visibleEditSelection.height,
-                              }}
-                            />
-                          )}
-                          <canvas
-                            ref={editCanvasRef}
-                            style={styles.imageEditCanvas}
-                            onPointerDown={handleSelectionPointerDown}
-                            onPointerMove={handleSelectionPointerMove}
-                            onPointerUp={finishSelectionDrag}
-                            onPointerCancel={finishSelectionDrag}
-                            aria-label="Box-select image edit region"
-                          />
-                        </div>
-                      </div>
-                      <div style={styles.imageEditSidePanel}>
-                        <div style={styles.imageEditBadge}>{editSelection ? t('playground.region_selected') : t('playground.drag_to_select')}</div>
-                        <div style={styles.imageEditFilename}>{editSource.name}</div>
-                        <button
-                          type="button"
-                          style={{ ...styles.imageEditGhostBtn, opacity: editSelection ? 1 : 0.5 }}
-                          onClick={clearEditSelection}
-                          disabled={!editSelection || isActiveConversationStreaming}
-                        >
-                          {t('playground.clear_selection')}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      style={styles.imageEditEmptyBtn}
-                      onClick={triggerEditImagePicker}
-                      disabled={isActiveConversationStreaming}
-                    >
-                      {t('playground.choose_source_image_for_regional_editing')}
-                    </button>
-                  )}
-                </div>
-              )}
-
               {pendingImages.length > 0 && (
                 <div style={styles.imagePreviewList}>
                   {pendingImages.map(image => (
@@ -2557,34 +2843,15 @@ export default function PlaygroundPage() {
                   {selectedModelIsImage && (
                     <div style={{ ...styles.imageSizeInlineControls, ...(isMobile ? styles.imageSizeInlineControlsMobile : null) }}>
                       {renderCustomSelect({
-                        id: 'image-size-mode',
-                        value: imageSizeSettings.mode,
-                        options: [
-                          { value: 'auto', label: 'Auto' },
-                          { value: 'ratio', label: 'Ratio' },
-                        ],
-                        onChange: value => updateImageSizeSettings({ mode: value as ImageSizeMode }),
-                        ariaLabel: 'Image size mode',
+                        id: 'image-size',
+                        value: imageSizeSettings.value,
+                        options: IMAGE_SIZE_OPTIONS,
+                        onChange: value => updateImageSizeSettings({ value }),
+                        ariaLabel: 'Image size',
                       })}
-                      {imageSizeSettings.mode === 'ratio' && (
-                        <>
-                          {renderCustomSelect({
-                            id: 'base-resolution',
-                            value: String(imageSizeSettings.baseResolution),
-                            options: BASE_RESOLUTION_OPTIONS.map(option => ({ value: String(option.value), label: option.label })),
-                            onChange: value => updateImageSizeSettings({ baseResolution: Number(value) as BaseResolution }),
-                            ariaLabel: 'Base resolution',
-                          })}
-                          {renderCustomSelect({
-                            id: 'image-ratio',
-                            value: imageSizeSettings.ratio,
-                            options: IMAGE_RATIO_OPTIONS,
-                            onChange: value => updateImageSizeSettings({ ratio: value as ImageRatio }),
-                            ariaLabel: 'Image ratio',
-                          })}
-                        </>
+                      {!isMobile && imageSizeSettings.value === IMAGE_SIZE_AUTO && (
+                        <span style={styles.imageSizeInlinePreview}>upstream default</span>
                       )}
-                      {!isMobile && <span style={styles.imageSizeInlinePreview}>{displayedImageSize}</span>}
                     </div>
                   )}
 
@@ -2878,6 +3145,36 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '32px 16px',
     color: cssVar('textTertiary'),
     fontSize: 12,
+  },
+  modeSwitcher: {
+    display: 'flex',
+    margin: '0 12px 8px',
+    padding: 2,
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    borderRadius: cssVar('radiusSm'),
+    background: cssVar('bgDeep'),
+    gap: 2,
+  },
+  modeSwitcherItem: {
+    flex: 1,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    padding: '6px 8px',
+    border: 'none',
+    borderRadius: 4,
+    background: 'transparent',
+    color: cssVar('textSecondary'),
+    cursor: 'pointer',
+    fontSize: 12,
+    fontFamily: 'inherit',
+    transition: cssVar('transition'),
+  },
+  modeSwitcherItemActive: {
+    background: cssVar('bg'),
+    color: cssVar('text'),
+    fontWeight: 500,
   },
   balanceBar: {
     display: 'flex',
@@ -3367,34 +3664,28 @@ const styles: Record<string, React.CSSProperties> = {
   },
   imageGroup: {
     display: 'flex',
-    flexWrap: 'nowrap',
+    flexWrap: 'wrap',
     alignItems: 'flex-start',
-    gap: 16,
+    gap: 12,
     maxWidth: '100%',
     margin: '10px 0 6px',
-    paddingBottom: 8,
-    overflowX: 'auto',
-    overflowY: 'hidden',
-    overscrollBehaviorX: 'contain',
-    scrollSnapType: 'x proximity',
   },
   imageGroupMobile: {
-    gap: 10,
+    gap: 8,
     marginTop: 8,
-    paddingBottom: 6,
   },
   generatedImageFrame: {
     display: 'inline-flex',
     flexDirection: 'column',
     alignItems: 'flex-start',
     gap: 8,
-    flex: '0 0 clamp(220px, 32vw, 420px)',
-    maxWidth: 'min(100%, 420px)',
-    scrollSnapAlign: 'start',
+    flex: '1 1 180px',
+    maxWidth: 'min(100%, 320px)',
+    minWidth: 0,
   },
   generatedImageFrameMobile: {
-    flexBasis: 'min(78vw, 300px)',
-    maxWidth: 'min(100%, 300px)',
+    flex: '1 1 140px',
+    maxWidth: 'min(100%, 240px)',
   },
   generatedImagePreviewBtn: {
     display: 'block',
@@ -3813,6 +4104,150 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     cursor: 'pointer',
     fontFamily: cssVar('fontSans'),
+  },
+  editModalOverlay: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 50,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    background: 'rgba(4, 7, 13, 0.78)',
+    backdropFilter: 'blur(10px)',
+  },
+  editModalCard: {
+    position: 'relative',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 14,
+    width: 'min(96vw, 1080px)',
+    maxHeight: '92vh',
+    padding: 18,
+    borderRadius: cssVar('radiusLg'),
+    border: `1px solid ${cssVar('border')}`,
+    background: cssVar('bgDeep'),
+    boxShadow: '0 28px 90px rgba(0, 0, 0, 0.45)',
+    overflow: 'hidden',
+  },
+  editModalCardMobile: {
+    width: '100%',
+    maxHeight: '94vh',
+    padding: 12,
+    gap: 10,
+  },
+  editModalHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  editModalBody: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) 200px',
+    gap: 14,
+    minHeight: 0,
+    flex: 1,
+    alignItems: 'stretch',
+  },
+  editModalBodyMobile: {
+    gridTemplateColumns: '1fr',
+  },
+  editModalStageWrap: {
+    minWidth: 0,
+    overflow: 'auto',
+    borderRadius: cssVar('radiusMd'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    background: 'rgba(2, 6, 14, 0.44)',
+    padding: 8,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editModalSide: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+    padding: 12,
+    borderRadius: cssVar('radiusSm'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    background: 'rgba(5, 10, 18, 0.38)',
+  },
+  editModalFooter: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+  },
+  editModalPrompt: {
+    width: '100%',
+    boxSizing: 'border-box',
+    padding: '10px 12px',
+    borderRadius: cssVar('radiusSm'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    background: cssVar('bgSurface'),
+    color: cssVar('text'),
+    fontFamily: cssVar('fontSans'),
+    fontSize: 13,
+    lineHeight: 1.5,
+    resize: 'vertical',
+    minHeight: 60,
+    outline: 'none',
+  },
+  editModalActions: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    flexWrap: 'wrap',
+  },
+  editModalHint: {
+    fontSize: 11,
+    color: cssVar('textTertiary'),
+    flex: 1,
+    minWidth: 0,
+  },
+  editModalBtnGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+  },
+  editModalSubmitBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '9px 16px',
+    border: 'none',
+    borderRadius: cssVar('radiusSm'),
+    background: cssVar('primary'),
+    color: cssVar('textInverse'),
+    fontSize: 13,
+    fontWeight: 600,
+    fontFamily: cssVar('fontSans'),
+    cursor: 'pointer',
+    transition: cssVar('transition'),
+  },
+  editModalStatus: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '8px 12px',
+    borderRadius: cssVar('radiusSm'),
+    background: cssVar('primarySubtle'),
+    color: cssVar('primary'),
+    fontSize: 12,
+    fontWeight: 500,
+  },
+  editModalError: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '8px 12px',
+    borderRadius: cssVar('radiusSm'),
+    background: cssVar('dangerSubtle'),
+    color: cssVar('danger'),
+    fontSize: 12,
+    fontWeight: 500,
   },
   imagePreviewList: {
     display: 'flex',

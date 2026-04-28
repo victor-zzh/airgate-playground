@@ -2,6 +2,7 @@ package playground
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"mime"
@@ -266,8 +267,17 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if status == 0 {
 			status = http.StatusOK
 		}
+		respBody := resp.Body
+		if status >= 200 && status < 300 {
+			if storedBody, err := p.storeResponseImageAssets(ctx, parseUserID(r), 0, resp.Body); err != nil {
+				logger.Warn("failed to store response image assets", "error", err)
+			} else {
+				respBody = storedBody
+				w.Header().Del("Content-Length")
+			}
+		}
 		w.WriteHeader(status)
-		_, _ = w.Write(resp.Body)
+		_, _ = w.Write(respBody)
 		return
 	}
 	headers.Set("Accept", "text/event-stream")
@@ -405,8 +415,17 @@ func (p *Plugin) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	if status == 0 {
 		status = http.StatusOK
 	}
+	respBody := resp.Body
+	if status >= 200 && status < 300 {
+		if storedBody, err := p.storeResponseImageAssets(ctx, parseUserID(r), 0, resp.Body); err != nil {
+			logger.Warn("failed to store response image assets", "error", err)
+		} else {
+			respBody = storedBody
+			w.Header().Del("Content-Length")
+		}
+	}
 	w.WriteHeader(status)
-	_, _ = w.Write(resp.Body)
+	_, _ = w.Write(respBody)
 }
 
 // ── Metadata Handlers ──
@@ -478,6 +497,80 @@ func parseMultipartStringField(body []byte, contentType, field string) string {
 		data, _ := io.ReadAll(part)
 		_ = part.Close()
 		return strings.TrimSpace(string(data))
+	}
+}
+
+func (p *Plugin) storeResponseImageAssets(ctx context.Context, userID int, conversationID int64, body []byte) ([]byte, error) {
+	if p.svc == nil || p.svc.storage == nil || !bytes.Contains(body, []byte("base64")) && !bytes.Contains(body, []byte("data:image/")) {
+		return body, nil
+	}
+	var payload any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return body, nil
+	}
+	changed := false
+	converted, err := p.convertResponseValue(ctx, userID, conversationID, payload, &changed)
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return body, nil
+	}
+	return json.Marshal(converted)
+}
+
+func (p *Plugin) convertResponseValue(ctx context.Context, userID int, conversationID int64, value any, changed *bool) (any, error) {
+	switch v := value.(type) {
+	case map[string]any:
+		if encoded, ok := v["b64_json"].(string); ok && encoded != "" {
+			asset, err := p.svc.storage.StoreImageBase64(ctx, userID, conversationID, "image/png", encoded)
+			if err != nil {
+				return nil, err
+			}
+			if err := p.svc.insertAsset(ctx, userID, conversationID, asset); err != nil {
+				return nil, err
+			}
+			publicURL, err := p.svc.storage.PublicURL(ctx, asset.ObjectKey)
+			if err != nil {
+				return nil, err
+			}
+			v["url"] = publicURL
+			delete(v, "b64_json")
+			*changed = true
+		}
+		for key, item := range v {
+			converted, err := p.convertResponseValue(ctx, userID, conversationID, item, changed)
+			if err != nil {
+				return nil, err
+			}
+			v[key] = converted
+		}
+		return v, nil
+	case []any:
+		for i, item := range v {
+			converted, err := p.convertResponseValue(ctx, userID, conversationID, item, changed)
+			if err != nil {
+				return nil, err
+			}
+			v[i] = converted
+		}
+		return v, nil
+	case string:
+		converted, err := p.svc.storeContentAssets(ctx, userID, conversationID, v)
+		if err != nil {
+			return nil, err
+		}
+		if converted != v {
+			resolved, err := p.svc.resolveAssetURLs(ctx, userID, converted)
+			if err != nil {
+				return nil, err
+			}
+			*changed = true
+			return resolved, nil
+		}
+		return v, nil
+	default:
+		return v, nil
 	}
 }
 
