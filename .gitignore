@@ -12,9 +12,7 @@
 /web/dist/
 
 # Embedded frontend assets
-!backend/internal/playground/webdist/
-backend/internal/playground/webdist/*
-!backend/internal/playground/webdist/index.js
+/backend/internal/playground/webdist/
 
 # Local tooling
 .claude/settings.local.json

@@ -1,6 +1,6 @@
 GO := GOTOOLCHAIN=local go
 
-.PHONY: help install build build-web build-backend release ci pre-commit lint fmt test vet setup-hooks clean
+.PHONY: help install build build-web webdist build-backend release ci pre-commit lint fmt test vet setup-hooks clean
 
 help: ## 显示帮助信息
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -14,19 +14,19 @@ build: build-web build-backend ## 完整构建
 build-web: ## 构建前端
 	cd web && npm run build
 
-build-backend: build-web ## 构建后端并复制前端产物
+webdist: build-web ## 准备后端嵌入的前端产物
 	rm -rf backend/internal/playground/webdist
 	cp -r web/dist backend/internal/playground/webdist
+
+build-backend: webdist ## 构建后端
 	mkdir -p bin
 	cd backend && $(GO) build -o ../bin/airgate-playground .
 
-release: build-web ## 构建 Linux 发布产物
-	rm -rf backend/internal/playground/webdist
-	cp -r web/dist backend/internal/playground/webdist
+release: webdist ## 构建 Linux 发布产物
 	mkdir -p bin
 	cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -buildvcs=false -trimpath -ldflags "-X 'github.com/DouDOU-start/airgate-playground/backend/internal/playground.PluginVersion=$${VERSION:-dev}'" -o ../bin/airgate-playground-linux-amd64 .
 
-ci: lint test vet build-backend ## 本地运行与 CI 一致的检查
+ci: webdist lint test vet build-backend ## 本地运行与 CI 一致的检查
 
 pre-commit: lint test vet ## pre-commit hook 调用
 
