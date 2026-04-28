@@ -18,6 +18,7 @@ func BuildPluginInfo() sdk.PluginInfo {
 			sdk.CapabilityHostListPlatforms,
 			sdk.CapabilityHostListModels,
 			sdk.CapabilityHostGetUserInfo,
+			sdk.CapabilityHostAssetStorage,
 		},
 		FrontendPages: []sdk.FrontendPage{
 			{

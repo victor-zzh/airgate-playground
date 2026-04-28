@@ -59,13 +59,7 @@ func (p *Plugin) Init(ctx sdk.PluginContext) error {
 	}
 	p.db = db
 
-	storage, err := NewObjectStorageFromConfig(cfg)
-	if err != nil {
-		_ = db.Close()
-		p.db = nil
-		p.logger.Warn("failed to initialize S3 storage; plugin loading in unconfigured mode", "error", err)
-		return nil
-	}
+	storage := NewObjectStorage(p.host)
 
 	p.svc = NewService(p.logger, p.db, p.host, ServiceOptions{
 		DefaultGroupID:     cfg.GetInt("default_group_id"),
