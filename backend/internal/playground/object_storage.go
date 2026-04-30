@@ -110,3 +110,7 @@ func (s *ObjectStorage) StoreImageBytes(ctx context.Context, userID int, convers
 func (s *ObjectStorage) PublicURL(ctx context.Context, objectKey string) (string, error) {
 	return s.host.GetAssetURL(ctx, objectKey)
 }
+
+func (s *ObjectStorage) GetBytes(ctx context.Context, objectKey string) (*sdk.HostAssetBytes, error) {
+	return s.host.GetAssetBytes(ctx, objectKey)
+}

@@ -3,11 +3,14 @@ package playground
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -211,6 +214,11 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "invalid request body")
+		return
+	}
+	body, err = p.rewriteChatImageAssetURLs(ctx, body)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
 		return
 	}
 	var fields struct {
@@ -479,6 +487,113 @@ func parsePathID(path, prefix string) int64 {
 	return id
 }
 
+func (p *Plugin) rewriteChatImageAssetURLs(ctx context.Context, body []byte) ([]byte, error) {
+	if p.svc == nil || p.svc.storage == nil || !bytes.Contains(body, []byte(`"image_url"`)) || !bytes.Contains(body, []byte("/assets-runtime/")) {
+		return body, nil
+	}
+	var payload any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return body, nil
+	}
+	changed := false
+	converted, err := p.rewriteImageURLValue(ctx, payload, &changed)
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return body, nil
+	}
+	return json.Marshal(converted)
+}
+
+func (p *Plugin) rewriteImageURLValue(ctx context.Context, value any, changed *bool) (any, error) {
+	switch v := value.(type) {
+	case map[string]any:
+		if raw, ok := v["url"].(string); ok && strings.HasPrefix(raw, "/assets-runtime/") {
+			dataURL, err := p.assetRuntimeURLToDataURL(ctx, raw)
+			if err != nil {
+				return nil, err
+			}
+			v["url"] = dataURL
+			*changed = true
+		}
+		for key, item := range v {
+			converted, err := p.rewriteImageURLValue(ctx, item, changed)
+			if err != nil {
+				return nil, err
+			}
+			v[key] = converted
+		}
+		return v, nil
+	case []any:
+		for i, item := range v {
+			converted, err := p.rewriteImageURLValue(ctx, item, changed)
+			if err != nil {
+				return nil, err
+			}
+			v[i] = converted
+		}
+		return v, nil
+	default:
+		return value, nil
+	}
+}
+
+func (p *Plugin) assetRuntimeURLToDataURL(ctx context.Context, raw string) (string, error) {
+	objectKey, err := assetObjectKeyFromRuntimeURL(raw)
+	if err != nil {
+		return "", err
+	}
+	asset, err := p.svc.storage.GetBytes(ctx, objectKey)
+	if err != nil {
+		return "", err
+	}
+	contentType := strings.TrimSpace(asset.ContentType)
+	if contentType == "" || contentType == "application/octet-stream" {
+		contentType = imageContentTypeForObjectKey(objectKey)
+	}
+	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(asset.Data), nil
+}
+
+func assetObjectKeyFromRuntimeURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	pathValue := u.Path
+	if pathValue == "" && strings.HasPrefix(raw, "/assets-runtime/") {
+		pathValue = raw
+	}
+	const prefix = "/assets-runtime/"
+	if !strings.HasPrefix(pathValue, prefix) {
+		return "", fmt.Errorf("invalid asset url")
+	}
+	objectKey, err := url.PathUnescape(strings.TrimPrefix(pathValue, prefix))
+	if err != nil {
+		return "", err
+	}
+	objectKey = strings.TrimLeft(objectKey, "/")
+	if objectKey == "" {
+		return "", fmt.Errorf("invalid asset url")
+	}
+	return objectKey, nil
+}
+
+func imageContentTypeForObjectKey(objectKey string) string {
+	switch {
+	case strings.HasSuffix(strings.ToLower(objectKey), ".jpg"), strings.HasSuffix(strings.ToLower(objectKey), ".jpeg"):
+		return "image/jpeg"
+	case strings.HasSuffix(strings.ToLower(objectKey), ".png"):
+		return "image/png"
+	case strings.HasSuffix(strings.ToLower(objectKey), ".webp"):
+		return "image/webp"
+	case strings.HasSuffix(strings.ToLower(objectKey), ".gif"):
+		return "image/gif"
+	default:
+		return "image/png"
+	}
+}
+
 func parseMultipartStringField(body []byte, contentType, field string) string {
 	_, params, err := mime.ParseMediaType(contentType)
 	if err != nil || params["boundary"] == "" {
@@ -593,11 +708,23 @@ func writeOpenAIError(w http.ResponseWriter, status int, errType, code, message 
 }
 
 func writeHostForwardError(w http.ResponseWriter, err error) {
-	if status.Code(err) == codes.ResourceExhausted {
-		writeOpenAIError(w, http.StatusPaymentRequired, "insufficient_quota", "insufficient_quota", "余额不足")
+	s, ok := status.FromError(err)
+	if !ok {
+		writeOpenAIError(w, http.StatusServiceUnavailable, "server_error", "upstream_error", "请求暂时无法完成，请稍后重试")
 		return
 	}
-	writeOpenAIError(w, http.StatusServiceUnavailable, "server_error", "upstream_error", "请求暂时无法完成，请稍后重试")
+	switch s.Code() {
+	case codes.InvalidArgument:
+		msg := s.Message()
+		if msg == "" {
+			msg = "请求无法完成，请检查输入后重试"
+		}
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", msg)
+	case codes.ResourceExhausted:
+		writeOpenAIError(w, http.StatusPaymentRequired, "insufficient_quota", "insufficient_quota", "余额不足")
+	default:
+		writeOpenAIError(w, http.StatusServiceUnavailable, "server_error", "upstream_error", "请求暂时无法完成，请稍后重试")
+	}
 }
 
 func copyHeaders(dst, src http.Header) {

@@ -35,6 +35,9 @@ const REASONING_MODEL_RE = /(^|[-_])(?:gpt-?5|o[134]|codex)(?:[-_.]|$)/i;
 const IMAGE_MODEL_RE = /(^|[-_])(?:gpt[-_]?image|image)(?:[-_.]|\d|$)/i;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MIN_SELECTION_SIZE = 8;
+const GPT_IMAGE_MAX_SIDE = 3840;
+const GPT_IMAGE_MIN_PIXELS = 655360;
+const GPT_IMAGE_MAX_PIXELS = 8294400;
 const DEFAULT_MODEL_ID = 'gpt-5.5';
 const ACTIVE_CONVERSATION_STORAGE_KEY = 'airgate.playground.activeConversationId';
 const SELECTED_MODEL_STORAGE_KEY = 'airgate.playground.selectedModel';
@@ -162,6 +165,52 @@ function resolveImageSize(settings: ImageSizeSettings) {
   return settings.value === IMAGE_SIZE_AUTO ? undefined : settings.value;
 }
 
+function roundToImageSizeMultiple(value: number, mode: 'ceil' | 'floor' | 'round') {
+  const scaled = value / 16;
+  const rounded = mode === 'ceil' ? Math.ceil(scaled) : mode === 'floor' ? Math.floor(scaled) : Math.round(scaled);
+  return Math.max(16, rounded * 16);
+}
+
+function isValidGPTImageSize(width: number, height: number) {
+  if (width <= 0 || height <= 0 || width > GPT_IMAGE_MAX_SIDE || height > GPT_IMAGE_MAX_SIDE) return false;
+  if (width % 16 !== 0 || height % 16 !== 0) return false;
+  const longSide = Math.max(width, height);
+  const shortSide = Math.min(width, height);
+  const pixels = width * height;
+  return longSide <= shortSide * 3 && pixels >= GPT_IMAGE_MIN_PIXELS && pixels <= GPT_IMAGE_MAX_PIXELS;
+}
+
+function sourceAlignedImageSize(width: number, height: number) {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return undefined;
+  const aspect = width / height;
+  if (aspect > 3 || aspect < 1 / 3) return undefined;
+
+  let targetPixels = clampNumber(width * height, GPT_IMAGE_MIN_PIXELS, GPT_IMAGE_MAX_PIXELS);
+  let nextWidth = 0;
+  let nextHeight = 0;
+
+  for (let i = 0; i < 8; i++) {
+    const rawHeight = Math.sqrt(targetPixels / aspect);
+    const rawWidth = rawHeight * aspect;
+    nextWidth = Math.min(GPT_IMAGE_MAX_SIDE, roundToImageSizeMultiple(rawWidth, i === 0 ? 'round' : 'ceil'));
+    nextHeight = Math.min(GPT_IMAGE_MAX_SIDE, roundToImageSizeMultiple(rawHeight, i === 0 ? 'round' : 'ceil'));
+
+    if (isValidGPTImageSize(nextWidth, nextHeight)) return `${nextWidth}x${nextHeight}`;
+    const pixels = nextWidth * nextHeight;
+    if (pixels < GPT_IMAGE_MIN_PIXELS) {
+      targetPixels = GPT_IMAGE_MIN_PIXELS * 1.02;
+      continue;
+    }
+    if (pixels > GPT_IMAGE_MAX_PIXELS || nextWidth >= GPT_IMAGE_MAX_SIDE || nextHeight >= GPT_IMAGE_MAX_SIDE) {
+      targetPixels = GPT_IMAGE_MAX_PIXELS * 0.98;
+      continue;
+    }
+    break;
+  }
+
+  return isValidGPTImageSize(nextWidth, nextHeight) ? `${nextWidth}x${nextHeight}` : undefined;
+}
+
 function imageSizeSummary(settings: ImageSizeSettings) {
   return settings.value === IMAGE_SIZE_AUTO ? 'Auto' : settings.value;
 }
@@ -172,6 +221,13 @@ function stripImageEditAnnotations(content: string) {
 
 function stripImageMarkdown(content: string) {
   return stripImageEditAnnotations(content).replace(IMAGE_MARKDOWN_RE, '[Image generated]').trim() || '[Image generated]';
+}
+
+function stripImagePlannerNoise(content: string) {
+  return stripImageEditAnnotations(content)
+    .replace(IMAGE_MARKDOWN_RE, '')
+    .replace(/^\s*\[Image generated\]\s*$/gmi, '')
+    .trim();
 }
 
 function copyableMessageText(content: string) {
@@ -1417,7 +1473,7 @@ export default function PlaygroundPage() {
 
       if (isImageRequest) {
         const lastUserMessage = requestMessages.filter(msg => msg.role === 'user').at(-1);
-        const userPrompt = lastUserMessage ? stripImageMarkdown(stripImageEditAnnotations(lastUserMessage.content)).trim() : '';
+        const userPrompt = lastUserMessage ? stripImagePlannerNoise(lastUserMessage.content) : '';
         let finalShotPrompts = [userPrompt || 'Generate the requested image.'];
         const planResponse = await chatCompletion(
           IMAGE_PROMPT_PLANNER_PLATFORM,
@@ -1946,12 +2002,16 @@ export default function PlaygroundPage() {
       const maskBlob = await createEditMaskBlob(selection);
       if (abort.signal.aborted) return;
 
+      const editImageElement = await loadImageElement(editSource.url);
+      const editSize = resolvedImageSize || sourceAlignedImageSize(editImageElement.naturalWidth, editImageElement.naturalHeight);
+      if (abort.signal.aborted) return;
+
       const form = new FormData();
       form.append('model', selectedModelID);
       form.append('prompt', prompt);
       form.append('image', editSource.file, editSource.name || 'image.png');
       form.append('mask', maskBlob, 'mask.png');
-      if (resolvedImageSize) form.append('size', resolvedImageSize);
+      if (editSize) form.append('size', editSize);
 
       const response = await requestImageEdit(selectedPlatform, form, abort.signal);
       if (abort.signal.aborted) return;
