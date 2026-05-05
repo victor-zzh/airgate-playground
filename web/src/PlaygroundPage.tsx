@@ -1041,6 +1041,7 @@ export default function PlaygroundPage() {
     else localStorage.removeItem(STUDIO_MODE_STORAGE_KEY);
   }, [studioMode]);
 
+  const messagesAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1162,7 +1163,9 @@ export default function PlaygroundPage() {
   }, []);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const messagesArea = messagesAreaRef.current;
+    if (!messagesArea) return;
+    messagesArea.scrollTo({ top: messagesArea.scrollHeight, behavior: 'smooth' });
   }, [messages, streamContent, streamReasoning]);
 
   useEffect(() => {
@@ -2887,7 +2890,7 @@ export default function PlaygroundPage() {
       {/* ── Main ── */}
       <div style={styles.main}>
         {/* Messages */}
-        <div style={styles.messagesArea}>
+        <div ref={messagesAreaRef} style={styles.messagesArea}>
           {!activeId && (
             <div style={{ ...styles.emptyState, ...(isMobile ? styles.emptyStateMobile : null) }}>
               <div style={styles.emptyTitle}>{t('playground.empty_title')}</div>
@@ -3978,11 +3981,11 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 6,
     padding: 4,
     borderRadius: '999px',
-    border: `1px solid ${cssVar('borderSubtle')}`,
-    background: 'rgba(8, 12, 20, 0.72)',
-    color: '#edf4ff',
+    border: `1px solid ${cssVar('glassBorder')}`,
+    background: cssVar('glass'),
+    color: cssVar('text'),
     backdropFilter: 'blur(10px)',
-    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
+    boxShadow: cssVar('shadowMd'),
   },
   generatedImageOverlayWrap: {
     position: 'relative',
@@ -4082,15 +4085,15 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     width: 42,
     height: 42,
-    border: `1px solid rgba(255, 255, 255, 0.16)`,
+    border: `1px solid ${cssVar('glassBorder')}`,
     borderRadius: '999px',
-    background: 'rgba(8, 12, 20, 0.72)',
-    color: '#edf4ff',
+    background: cssVar('glass'),
+    color: cssVar('text'),
     fontSize: 34,
     lineHeight: 1,
     cursor: 'pointer',
     backdropFilter: 'blur(10px)',
-    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
+    boxShadow: cssVar('shadowMd'),
   },
   imagePreviewCounter: {
     position: 'absolute',
@@ -4099,11 +4102,12 @@ const styles: Record<string, React.CSSProperties> = {
     transform: 'translateX(-50%)',
     padding: '5px 10px',
     borderRadius: '999px',
-    background: 'rgba(8, 12, 20, 0.72)',
-    color: '#edf4ff',
+    border: `1px solid ${cssVar('glassBorder')}`,
+    background: cssVar('glass'),
+    color: cssVar('textSecondary'),
     fontSize: 12,
     backdropFilter: 'blur(10px)',
-    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
+    boxShadow: cssVar('shadowMd'),
   },
   imagePreviewCloseBtn: {
     position: 'absolute',
@@ -4114,15 +4118,15 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     width: 32,
     height: 32,
-    border: `1px solid rgba(255, 255, 255, 0.16)`,
+    border: `1px solid ${cssVar('glassBorder')}`,
     borderRadius: '999px',
-    background: 'rgba(8, 12, 20, 0.72)',
-    color: '#edf4ff',
+    background: cssVar('glass'),
+    color: cssVar('text'),
     fontSize: 22,
     lineHeight: 1,
     cursor: 'pointer',
     backdropFilter: 'blur(10px)',
-    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.24)',
+    boxShadow: cssVar('shadowMd'),
   },
   imagePreviewLarge: {
     display: 'block',
@@ -4317,7 +4321,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '6px 10px',
     borderRadius: cssVar('radiusSm'),
     border: `1px solid ${cssVar('border')}`,
-    background: 'rgba(9, 14, 24, 0.5)',
+    background: cssVar('bgElevated'),
     color: cssVar('textSecondary'),
     fontSize: 12,
     fontWeight: 700,
@@ -4333,7 +4337,7 @@ const styles: Record<string, React.CSSProperties> = {
     height: 30,
     borderRadius: '999px',
     border: `1px solid ${cssVar('borderSubtle')}`,
-    background: 'rgba(9, 14, 24, 0.52)',
+    background: cssVar('bgElevated'),
     color: cssVar('textSecondary'),
     fontSize: 18,
     lineHeight: 1,
@@ -4353,7 +4357,7 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'auto',
     borderRadius: cssVar('radiusMd'),
     border: `1px solid ${cssVar('borderSubtle')}`,
-    background: 'rgba(2, 6, 14, 0.44)',
+    background: cssVar('bgDeep'),
     padding: 8,
   },
   imageEditStage: {
@@ -4396,7 +4400,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 10,
     borderRadius: cssVar('radiusSm'),
     border: `1px solid ${cssVar('borderSubtle')}`,
-    background: 'rgba(5, 10, 18, 0.38)',
+    background: cssVar('bgSurface'),
   },
   imageEditBadge: {
     display: 'inline-flex',
@@ -4479,7 +4483,7 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'auto',
     borderRadius: cssVar('radiusMd'),
     border: `1px solid ${cssVar('borderSubtle')}`,
-    background: 'rgba(2, 6, 14, 0.44)',
+    background: cssVar('bgDeep'),
     padding: 8,
     display: 'flex',
     alignItems: 'center',
@@ -4492,7 +4496,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 12,
     borderRadius: cssVar('radiusSm'),
     border: `1px solid ${cssVar('borderSubtle')}`,
-    background: 'rgba(5, 10, 18, 0.38)',
+    background: cssVar('bgSurface'),
   },
   editModalFooter: {
     display: 'flex',
@@ -4602,8 +4606,9 @@ const styles: Record<string, React.CSSProperties> = {
     bottom: 4,
     padding: '2px 6px',
     borderRadius: 999,
-    background: 'rgba(0, 0, 0, 0.62)',
-    color: '#fff',
+    border: `1px solid ${cssVar('glassBorder')}`,
+    background: cssVar('glass'),
+    color: cssVar('text'),
     fontSize: 11,
     lineHeight: '14px',
     pointerEvents: 'none',
@@ -4614,10 +4619,10 @@ const styles: Record<string, React.CSSProperties> = {
     right: 4,
     width: 20,
     height: 20,
-    border: 'none',
+    border: `1px solid ${cssVar('glassBorder')}`,
     borderRadius: 999,
-    background: 'rgba(0, 0, 0, 0.62)',
-    color: '#fff',
+    background: cssVar('glass'),
+    color: cssVar('text'),
     cursor: 'pointer',
     lineHeight: '20px',
     padding: 0,
