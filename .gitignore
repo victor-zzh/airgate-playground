@@ -6,6 +6,8 @@
 
 # Runtime data
 /backend/devdata/
+tmp/
+*.log
 
 # Frontend
 /web/node_modules/

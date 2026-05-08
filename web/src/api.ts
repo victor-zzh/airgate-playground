@@ -1,9 +1,28 @@
 const BASE = '/api/v1/ext-user/airgate-playground';
 const CORE_BASE = '/api/v1';
 
+function getStoredToken() {
+  if (typeof window === 'undefined') return '';
+  try {
+    return window.localStorage.getItem('token') || '';
+  } catch {
+    return '';
+  }
+}
+
+function clearStoredTokenAndRedirect() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem('token');
+  } catch {
+    // Storage can be unavailable in private mode or locked-down browsers.
+  }
+  window.location.href = '/login';
+}
+
 function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
-  const token = localStorage.getItem('token');
+  const token = getStoredToken();
   if (token) headers['Authorization'] = `Bearer ${token}`;
   return headers;
 }
@@ -26,8 +45,7 @@ async function request<T>(method: string, path: string, body?: unknown, base = B
       msg = j.error || j.message || msg;
     } catch { /* ignore */ }
     if (resp.status === 401) {
-      localStorage.removeItem('token');
-      window.location.href = '/login';
+      clearStoredTokenAndRedirect();
     }
     throw new Error(msg);
   }
@@ -306,8 +324,7 @@ export async function chatCompletion(
 
   if (!resp.ok) {
     if (resp.status === 401) {
-      localStorage.removeItem('token');
-      window.location.href = '/login';
+      clearStoredTokenAndRedirect();
     }
     const errorPayload = parsed as { error?: { message?: string } | string; message?: string } | null;
     const message = typeof errorPayload?.error === 'string'
@@ -339,8 +356,7 @@ export async function editImage(platform: string, form: FormData, signal?: Abort
 
   if (!resp.ok) {
     if (resp.status === 401) {
-      localStorage.removeItem('token');
-      window.location.href = '/login';
+      clearStoredTokenAndRedirect();
     }
     const errorPayload = parsed as { error?: { message?: string } | string; message?: string } | null;
     const message = typeof errorPayload?.error === 'string'
@@ -393,6 +409,9 @@ export async function chatCompletionsStream(
       const parsed = JSON.parse(text);
       msg = parsed.error?.message || parsed.error || parsed.message || msg;
     } catch { /* ignore */ }
+    if (resp.status === 401) {
+      clearStoredTokenAndRedirect();
+    }
     callbacks.onError(msg);
     return;
   }

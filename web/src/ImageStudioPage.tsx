@@ -135,6 +135,25 @@ function generateLocalId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function readLocalStorageValue(key: string) {
+  if (typeof window === 'undefined') return '';
+  try {
+    return window.localStorage.getItem(key) || '';
+  } catch {
+    return '';
+  }
+}
+
+function writeLocalStorageValue(key: string, value: string | null) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (value == null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, value);
+  } catch {
+    // Storage can be unavailable in private mode or locked-down browsers.
+  }
+}
+
 function platformDisplayName(platforms: PlatformInfo[], name: string) {
   return platforms.find(p => p.name === name)?.display_name || name;
 }
@@ -143,8 +162,8 @@ export default function ImageStudioPage({ onExit, userInfo, onUserInfoChange }: 
   const { t } = useTranslation();
   const [platforms, setPlatforms] = useState<PlatformInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [platform, setPlatform] = useState<string>(() => localStorage.getItem(STORAGE_PLATFORM) || '');
-  const [modelID, setModelID] = useState<string>(() => localStorage.getItem(STORAGE_MODEL) || '');
+  const [platform, setPlatform] = useState<string>(() => readLocalStorageValue(STORAGE_PLATFORM));
+  const [modelID, setModelID] = useState<string>(() => readLocalStorageValue(STORAGE_MODEL));
   const [selectedSize, setSelectedSize] = useState<string>(SIZE_AUTO);
   const [count, setCount] = useState<number>(1);
   const [prompt, setPrompt] = useState('');
@@ -191,11 +210,11 @@ export default function ImageStudioPage({ onExit, userInfo, onUserInfoChange }: 
   }, [platform]);
 
   useEffect(() => {
-    if (platform) localStorage.setItem(STORAGE_PLATFORM, platform);
+    writeLocalStorageValue(STORAGE_PLATFORM, platform || null);
   }, [platform]);
 
   useEffect(() => {
-    if (modelID) localStorage.setItem(STORAGE_MODEL, modelID);
+    writeLocalStorageValue(STORAGE_MODEL, modelID || null);
   }, [modelID]);
 
   // Cleanup refs on unmount

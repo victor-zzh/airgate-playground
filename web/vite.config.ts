@@ -16,6 +16,9 @@ export default defineConfig({
     outDir: 'dist',
     rollupOptions: {
       external: ['react', 'react-dom', 'react/jsx-runtime', 'react-i18next'],
+      output: {
+        inlineDynamicImports: true,
+      },
     },
     watch: watchOptions,
   },

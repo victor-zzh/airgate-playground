@@ -1,16 +1,15 @@
-import { Children, cloneElement, isValidElement, useState, useEffect, useRef, useCallback, type CSSProperties, type ReactNode } from 'react';
+import { Children, Suspense, cloneElement, isValidElement, lazy, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import katex from 'katex';
-import 'katex/dist/katex.min.css';
 import { cssVar } from '@airgate/theme';
 import { api, chatCompletion, chatCompletionsStream, editImage as requestImageEdit } from './api';
 import type { ChatMessageContent, Conversation, ImageEditResponse, Message, ModelInfo, PlatformInfo, ReasoningEffort, UserInfo } from './api';
-import ImageStudioPage from './ImageStudioPage';
 
 const STUDIO_MODE_STORAGE_KEY = 'airgate.playground.studioMode';
 // Feature flag — Image Studio is finished but hidden until we decide on persistence
 // (see ImageStudioPage.tsx). Flip to true to expose the entry points again.
 const IMAGE_STUDIO_ENABLED = false;
+const ImageStudioPage = lazy(() => import('./ImageStudioPage'));
+const MathRenderer = lazy(() => import('./MathRenderer'));
 
 declare global {
   interface Window {
@@ -580,21 +579,34 @@ function defaultModelOptionValue(models: ModelInfo[]) {
   return preferred ? modelOptionValue(preferred) : (models[0] ? modelOptionValue(models[0]) : '');
 }
 
+function readLocalStorageValue(key: string) {
+  if (typeof window === 'undefined') return '';
+  try {
+    return window.localStorage.getItem(key) || '';
+  } catch {
+    return '';
+  }
+}
+
+function writeLocalStorageValue(key: string, value: string | null) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (value == null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, value);
+  } catch {
+    // Storage can be unavailable in private mode or locked-down browsers.
+  }
+}
+
 function getStoredActiveConversationId() {
-  if (typeof window === 'undefined') return null;
-  const raw = window.localStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+  const raw = readLocalStorageValue(ACTIVE_CONVERSATION_STORAGE_KEY);
   if (!raw) return null;
   const value = Number(raw);
   return Number.isInteger(value) && value > 0 ? value : null;
 }
 
 function getStoredSelectedModel() {
-  if (typeof window === 'undefined') return '';
-  return window.localStorage.getItem(SELECTED_MODEL_STORAGE_KEY) || '';
-}
-
-function platformDisplayName(platforms: PlatformInfo[], name?: string) {
-  return platforms.find(item => item.name === name)?.display_name || name || '';
+  return readLocalStorageValue(SELECTED_MODEL_STORAGE_KEY);
 }
 
 function isSafeLinkUrl(url: string) {
@@ -735,15 +747,14 @@ function renderInlineMarkdown(text: string, keyPrefix: string, options: MessageC
 }
 
 function renderMath(tex: string, key: string, displayMode: boolean) {
-  const html = katex.renderToString(tex, {
-    displayMode,
-    throwOnError: false,
-    strict: 'ignore',
-    trust: false,
-  });
-
   const Tag = displayMode ? 'div' : 'span';
-  return <Tag key={key} style={displayMode ? styles.markdownBlockMath : styles.markdownInlineMath} dangerouslySetInnerHTML={{ __html: html }} />;
+  const style = displayMode ? styles.markdownBlockMath : styles.markdownInlineMath;
+  const fallback = <Tag style={style}>{tex}</Tag>;
+  return (
+    <Suspense key={key} fallback={fallback}>
+      <MathRenderer displayMode={displayMode} style={style} tex={tex} />
+    </Suspense>
+  );
 }
 
 function renderHeading(level: number, text: string, key: string, options: MessageContentOptions = {}) {
@@ -1052,14 +1063,11 @@ export default function PlaygroundPage() {
     typeof window !== 'undefined' ? window.innerWidth <= MOBILE_BREAKPOINT : false
   ));
   const [studioMode, setStudioMode] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return localStorage.getItem(STUDIO_MODE_STORAGE_KEY) === '1';
+    return readLocalStorageValue(STUDIO_MODE_STORAGE_KEY) === '1';
   });
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (studioMode) localStorage.setItem(STUDIO_MODE_STORAGE_KEY, '1');
-    else localStorage.removeItem(STUDIO_MODE_STORAGE_KEY);
+    writeLocalStorageValue(STUDIO_MODE_STORAGE_KEY, studioMode ? '1' : null);
   }, [studioMode]);
 
   const messagesAreaRef = useRef<HTMLDivElement>(null);
@@ -1116,7 +1124,7 @@ export default function PlaygroundPage() {
       if (storedActiveId && nextConversations.some(item => item.id === storedActiveId)) {
         setActiveId(storedActiveId);
       } else {
-        window.localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+        writeLocalStorageValue(ACTIVE_CONVERSATION_STORAGE_KEY, null);
       }
     }).catch(() => {});
     api.getUserInfo().then(setUserInfo).catch(() => {});
@@ -1147,18 +1155,18 @@ export default function PlaygroundPage() {
     activeIdRef.current = activeId;
     if (typeof window === 'undefined' || !conversationsLoaded) return;
     if (activeId && activeId !== DRAFT_CONVERSATION_ID) {
-      window.localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, String(activeId));
+      writeLocalStorageValue(ACTIVE_CONVERSATION_STORAGE_KEY, String(activeId));
     } else {
-      window.localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+      writeLocalStorageValue(ACTIVE_CONVERSATION_STORAGE_KEY, null);
     }
   }, [activeId, conversationsLoaded]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || models.length === 0) return;
     if (selectedModel && models.some(item => modelOptionValue(item) === selectedModel)) {
-      window.localStorage.setItem(SELECTED_MODEL_STORAGE_KEY, selectedModel);
+      writeLocalStorageValue(SELECTED_MODEL_STORAGE_KEY, selectedModel);
     } else {
-      window.localStorage.removeItem(SELECTED_MODEL_STORAGE_KEY);
+      writeLocalStorageValue(SELECTED_MODEL_STORAGE_KEY, null);
     }
   }, [models, selectedModel]);
 
@@ -1273,18 +1281,28 @@ export default function PlaygroundPage() {
     setImageSizeSettings(current => ({ ...current, ...patch }));
   }, []);
 
-  const selectedModelInfo = models.find(item => modelOptionValue(item) === selectedModel);
+  const selectedModelInfo = useMemo(
+    () => models.find(item => modelOptionValue(item) === selectedModel),
+    [models, selectedModel],
+  );
   const selectedModelID = selectedModelInfo?.id || '';
   const selectedModelPlatform = selectedModelInfo?.platform || '';
   const selectedModelIsImage = isImageModel(selectedModelInfo);
   const selectedModelSupportsReasoning = supportsReasoning(selectedModelInfo);
-  const resolvedImageSize = resolveImageSize(imageSizeSettings);
+  const resolvedImageSize = useMemo(() => resolveImageSize(imageSizeSettings), [imageSizeSettings.value]);
 
   const selectedPlatform = selectedModelPlatform;
-  const modelOptions = models.map(model => ({
-    value: modelOptionValue(model),
-    label: `${model.name || model.id} · ${platformDisplayName(platforms, model.platform)}`,
-  }));
+  const platformNameById = useMemo(
+    () => new Map(platforms.map(item => [item.name, item.display_name || item.name])),
+    [platforms],
+  );
+  const modelOptions = useMemo(
+    () => models.map(model => ({
+      value: modelOptionValue(model),
+      label: `${model.name || model.id} · ${platformNameById.get(model.platform || '') || model.platform || ''}`,
+    })),
+    [models, platformNameById],
+  );
 
   const renderCustomSelect = ({
     id,
@@ -2423,12 +2441,12 @@ export default function PlaygroundPage() {
       .catch(() => setInteractionNotice('Copy failed'));
   }, []);
 
-  const interactiveMessageOptions = {
+  const interactiveMessageOptions = useMemo(() => ({
     onImagePreview: handleImagePreview,
     imagePreviewTitle: t('playground.preview_image'),
     generatedImageAlt: t('playground.generated_image'),
     isMobile,
-  };
+  }), [handleImagePreview, isMobile, t]);
 
   const renderImageDownloadButton = (image: PreviewImage, preventToggle = false) => (
     <button
@@ -2567,11 +2585,13 @@ export default function PlaygroundPage() {
 
   if (IMAGE_STUDIO_ENABLED && studioMode) {
     return (
-      <ImageStudioPage
-        onExit={() => setStudioMode(false)}
-        userInfo={userInfo}
-        onUserInfoChange={setUserInfo}
-      />
+      <Suspense fallback={<div style={styles.studioLoading}>{t('playground.loading', { defaultValue: 'Loading...' })}</div>}>
+        <ImageStudioPage
+          onExit={() => setStudioMode(false)}
+          userInfo={userInfo}
+          onUserInfoChange={setUserInfo}
+        />
+      </Suspense>
     );
   }
 
@@ -3311,6 +3331,16 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: cssVar('fontSans'),
     color: cssVar('text'),
     overflow: 'hidden',
+  },
+  studioLoading: {
+    display: 'flex',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: cssVar('bgDeep'),
+    color: cssVar('textSecondary'),
+    fontFamily: cssVar('fontSans'),
+    fontSize: 13,
   },
 
   // ── Sidebar ──

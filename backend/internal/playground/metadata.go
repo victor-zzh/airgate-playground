@@ -2,7 +2,9 @@ package playground
 
 import sdk "github.com/DouDOU-start/airgate-sdk"
 
-var PluginVersion = "0.1.0"
+// PluginVersion defaults to the local development version.
+// Release builds override it with the git tag via ldflags.
+var PluginVersion = "dev"
 
 func BuildPluginInfo() sdk.PluginInfo {
 	return sdk.PluginInfo{
