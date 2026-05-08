@@ -38,6 +38,7 @@ type GalleryItem = {
   model: string;
   platform: string;
   createdAt: number;
+  dimensions?: string;
 };
 
 type Reference = {
@@ -118,6 +119,15 @@ function downloadFromUrl(url: string, filename: string) {
     .catch(() => {
       window.open(url, '_blank');
     });
+}
+
+function probeImageDimensions(url: string): Promise<string> {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve(`${img.naturalWidth}×${img.naturalHeight}`);
+    img.onerror = () => resolve('');
+    img.src = url;
+  });
 }
 
 function generateLocalId() {
@@ -316,6 +326,9 @@ export default function ImageStudioPage({ onExit, userInfo, onUserInfoChange }: 
             createdAt: Date.now(),
           };
           setGallery(prev => [item, ...prev]);
+          probeImageDimensions(result.url).then(dim => {
+            if (dim) setGallery(prev => prev.map(g => g.id === item.id ? { ...g, dimensions: dim } : g));
+          });
           return item;
         })
         .catch(err => {
@@ -405,7 +418,7 @@ export default function ImageStudioPage({ onExit, userInfo, onUserInfoChange }: 
             <img src={preview.url} alt={preview.prompt} style={styles.previewImage} />
             <div style={styles.previewMeta}>
               <span style={styles.previewMetaLabel}>{preview.model}</span>
-              <span style={styles.previewMetaLabel}>{preview.size}</span>
+              <span style={styles.previewMetaLabel}>{preview.dimensions || preview.size}</span>
             </div>
             <button
               type="button"
@@ -741,7 +754,7 @@ export default function ImageStudioPage({ onExit, userInfo, onUserInfoChange }: 
                     </div>
                     <div style={styles.galleryFooter}>
                       <span style={styles.galleryPrompt} title={item.prompt}>{item.prompt}</span>
-                      <span style={styles.galleryMeta}>{item.size} · {item.model}</span>
+                      <span style={styles.galleryMeta}>{item.dimensions || item.size} · {item.model}</span>
                     </div>
                   </div>
                 ))}

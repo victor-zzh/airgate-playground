@@ -619,12 +619,27 @@ function pushTextWithBreaks(nodes: ReactNode[], text: string, keyPrefix: string)
   });
 }
 
-function renderGeneratedImage(key: string, url: string, alt: string, options: MessageContentOptions) {
-  const imageIndex = options.takeImageIndex?.() ?? -1;
+function GeneratedImageFrame({ url, alt, options, imageIndex }: {
+  url: string; alt: string; options: MessageContentOptions; imageIndex: number;
+}) {
+  const [dimensions, setDimensions] = useState('');
   const image = { url, alt };
   const annotation = options.imageEditAnnotations?.find(item => item.imageIndex === imageIndex);
   const imageActions = options.imageActions?.(image, imageIndex);
-  const imageNode = <img src={url} alt={alt} style={styles.generatedImage} loading="lazy" />;
+  const imageNode = (
+    <img
+      src={url}
+      alt={alt}
+      style={styles.generatedImage}
+      loading="lazy"
+      onLoad={e => {
+        const img = e.currentTarget;
+        if (img.naturalWidth && img.naturalHeight) {
+          setDimensions(`${img.naturalWidth}×${img.naturalHeight}`);
+        }
+      }}
+    />
+  );
   const annotatedImage = annotation ? (
     <span style={styles.generatedImageOverlayWrap}>
       {imageNode}
@@ -654,11 +669,17 @@ function renderGeneratedImage(key: string, url: string, alt: string, options: Me
   ) : annotatedImage;
 
   return (
-    <span key={key} style={{ ...styles.generatedImageFrame, ...(options.isMobile ? styles.generatedImageFrameMobile : null) }}>
+    <span style={{ ...styles.generatedImageFrame, ...(options.isMobile ? styles.generatedImageFrameMobile : null) }}>
       {previewableImage}
       {imageActions && <span style={styles.generatedImageActions}>{imageActions}</span>}
+      {dimensions && <span style={styles.generatedImageDimensions}>{dimensions}</span>}
     </span>
   );
+}
+
+function renderGeneratedImage(key: string, url: string, alt: string, options: MessageContentOptions) {
+  const imageIndex = options.takeImageIndex?.() ?? -1;
+  return <GeneratedImageFrame key={key} url={url} alt={alt} options={options} imageIndex={imageIndex} />;
 }
 
 function renderInlineMarkdown(text: string, keyPrefix: string, options: MessageContentOptions = {}) {
@@ -3986,6 +4007,14 @@ const styles: Record<string, React.CSSProperties> = {
     color: cssVar('text'),
     backdropFilter: 'blur(10px)',
     boxShadow: cssVar('shadowMd'),
+  },
+  generatedImageDimensions: {
+    display: 'block',
+    marginTop: 4,
+    fontSize: 11,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+    color: cssVar('textTertiary'),
+    textAlign: 'center' as const,
   },
   generatedImageOverlayWrap: {
     position: 'relative',
