@@ -1,7 +1,7 @@
 import { type CSSProperties, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useStudio } from './StudioContext';
-import type { GalleryItem, GenerationTask } from './types';
+import type { GalleryItem, StudioGenerationTask } from './types';
 import { studioStyles as ss } from './studioStyles';
 import { downloadImage } from '../utils';
 
@@ -63,7 +63,7 @@ const taskCardStyles: Record<string, CSSProperties> = {
   },
 };
 
-function TaskCard({ task }: { task: GenerationTask }) {
+function TaskCard({ task }: { task: StudioGenerationTask }) {
   const { t } = useTranslation();
 
   const statusLabel = task.status === 'queued'

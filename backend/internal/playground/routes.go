@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime"
-	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -37,12 +35,11 @@ func (p *Plugin) RegisterRoutes(r sdk.RouteRegistrar) {
 	r.Handle(http.MethodPut, "/messages/", p.requireUser(p.handleUpdateMessage))
 	r.Handle(http.MethodPost, "/messages", p.requireUser(p.handlePersistMessage))
 	r.Handle(http.MethodPost, "/chat/completions", p.requireUser(p.handleChatCompletions))
-	r.Handle(http.MethodPost, "/images/edits", p.requireUser(p.handleImageEdits))
 
-	// Image tasks (async generation)
-	r.Handle(http.MethodPost, "/image-tasks", p.requireUser(p.handleCreateImageTask))
-	r.Handle(http.MethodGet, "/image-tasks", p.requireUser(p.handleListImageTasks))
-	r.Handle(http.MethodGet, "/image-tasks/", p.requireUser(p.handleGetImageTask))
+	// Generation tasks
+	r.Handle(http.MethodPost, "/generation-tasks", p.requireUser(p.handleCreateGenerationTask))
+	r.Handle(http.MethodGet, "/generation-tasks", p.requireUser(p.handleListGenerationTasks))
+	r.Handle(http.MethodGet, "/generation-tasks/", p.requireUser(p.handleGetGenerationTask))
 
 	// Metadata (platforms, models, user info)
 	r.Handle(http.MethodGet, "/platforms", p.requireUser(p.handleListPlatforms))
@@ -374,104 +371,15 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-func (p *Plugin) handleImageEdits(w http.ResponseWriter, r *http.Request) {
-	rid := sdk.ExtractOrGenerateRequestID(r.Header)
-	ctx := sdk.WithRequestID(r.Context(), rid)
-	ctx, logger := sdk.LoggerWithRequestID(ctx)
-	logger.Debug("playground_request_received",
-		sdk.LogFieldMethod, r.Method,
-		sdk.LogFieldPath, r.URL.Path,
-		sdk.LogFieldUserID, parseUserID(r),
-	)
+// ── Generation Task Handlers ──
 
-	platform := strings.TrimSpace(r.Header.Get("X-Airgate-Platform"))
-	if platform == "" {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "platform required")
-		return
-	}
-
-	contentType := r.Header.Get("Content-Type")
-	if !strings.HasPrefix(strings.ToLower(contentType), "multipart/") {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "multipart/form-data required")
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "invalid request body")
-		return
-	}
-	model := parseMultipartStringField(body, contentType, "model")
-	if model == "" {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "model required")
-		return
-	}
-
-	headers := make(http.Header)
-	headers.Set("Content-Type", contentType)
-	headers.Set("Accept", "application/json")
-	headers.Set("X-Airgate-Platform", platform)
-	headers.Set("X-Airgate-Task-Execution", "true")
-
-	logger.Debug("upstream_request_start",
-		sdk.LogFieldPlatform, platform,
-		sdk.LogFieldModel, model,
-		sdk.LogFieldPath, "/v1/images/edits",
-	)
-	resp, err := hostForward(ctx, p.host, hostForwardRequest{
-		UserID:  int64(parseUserID(r)),
-		GroupID: 0,
-		Model:   model,
-		Method:  http.MethodPost,
-		Path:    "/v1/images/edits",
-		Headers: headers,
-		Body:    body,
-		Stream:  false,
-	})
-	if err != nil {
-		logger.Warn("upstream_request_failed",
-			sdk.LogFieldPlatform, platform,
-			sdk.LogFieldModel, model,
-			sdk.LogFieldError, err,
-		)
-		writeHostForwardError(w, err)
-		return
-	}
-	logger.Debug("upstream_request_completed",
-		sdk.LogFieldPlatform, platform,
-		sdk.LogFieldModel, model,
-		sdk.LogFieldStatus, resp.StatusCode,
-	)
-
-	copyHeaders(w.Header(), resp.Headers)
-	if w.Header().Get("Content-Type") == "" {
-		w.Header().Set("Content-Type", "application/json")
-	}
-	status := resp.StatusCode
-	if status == 0 {
-		status = http.StatusOK
-	}
-	respBody := resp.Body
-	if status >= 200 && status < 300 {
-		if storedBody, err := p.storeResponseImageAssets(ctx, parseUserID(r), 0, resp.Body); err != nil {
-			logger.Warn("failed to store response image assets", "error", err)
-		} else {
-			respBody = storedBody
-			w.Header().Del("Content-Length")
-		}
-	}
-	w.WriteHeader(status)
-	_, _ = w.Write(respBody)
-}
-
-// ── Image Task Handlers ──
-
-func (p *Plugin) handleCreateImageTask(w http.ResponseWriter, r *http.Request) {
-	var req CreateImageTaskRequest
+func (p *Plugin) handleCreateGenerationTask(w http.ResponseWriter, r *http.Request) {
+	var req CreateGenerationTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
+	normalizeGenerationRequest(&req)
 
 	userID := parseUserID(r)
 
@@ -488,33 +396,68 @@ func (p *Plugin) handleCreateImageTask(w http.ResponseWriter, r *http.Request) {
 		}
 		groupID = conv.GroupID
 	}
+	if groupID <= 0 {
+		groupID = int64(p.svc.opts.DefaultGroupID)
+	}
+	if groupID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "group_id is required"})
+		return
+	}
 
-	coreTask, err := hostCreateTask(r.Context(), p.host, "image_generation", int64(userID), map[string]interface{}{
-		"conversation_id": req.ConversationID,
-		"platform":        req.Platform,
-		"model":           req.Model,
-		"prompt":          req.Prompt,
-		"image_size":      req.ImageSize,
-		"group_id":        groupID,
-		"mode":            req.Mode,
-		"source_image":    req.SourceImage,
-		"mask":            req.Mask,
-	})
+	if req.ConversationID > 0 && shouldPersistGenerationUserMessage(req.ClientContext) {
+		content := req.MessageContent
+		if strings.TrimSpace(content) == "" {
+			content = req.Prompt
+		}
+		storedContent, err := p.svc.storeContentAssets(r.Context(), userID, req.ConversationID, content)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if _, err := p.svc.saveMessage(r.Context(), req.ConversationID, "user", storedContent, "", "", req.Platform, req.Model, groupID, 0, 0, 0); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	coreTask, err := hostCreateTask(
+		r.Context(),
+		p.host,
+		generationTaskType,
+		int64(userID),
+		generationTaskInputMap(req, groupID),
+		generationTaskAttributes(req, groupID),
+	)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, coreTaskToImageTask(coreTask))
+	writeJSON(w, http.StatusCreated, coreTaskToGenerationTask(coreTask))
 }
 
-func (p *Plugin) handleGetImageTask(w http.ResponseWriter, r *http.Request) {
-	taskID := parsePathID(r.URL.Path, "/image-tasks/")
+func shouldPersistGenerationUserMessage(ctx map[string]interface{}) bool {
+	if ctx == nil {
+		return true
+	}
+	value, ok := ctx["persist_user_message"]
+	if !ok {
+		return true
+	}
+	if enabled, ok := value.(bool); ok {
+		return enabled
+	}
+	return true
+}
+
+func (p *Plugin) handleGetGenerationTask(w http.ResponseWriter, r *http.Request) {
+	taskID := parsePathID(r.URL.Path, "/generation-tasks/")
 	if taskID <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid task id"})
 		return
 	}
-	coreTask, err := hostGetTask(r.Context(), p.host, taskID)
+	userID := parseUserID(r)
+	coreTask, err := hostGetTask(r.Context(), p.host, int64(userID), taskID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -523,74 +466,12 @@ func (p *Plugin) handleGetImageTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
 		return
 	}
-	writeJSON(w, http.StatusOK, coreTaskToImageTask(coreTask))
+	writeJSON(w, http.StatusOK, coreTaskToGenerationTask(coreTask))
 }
 
-func coreTaskToImageTask(t *sdk.HostTask) *ImageTask {
-	if t == nil {
-		return nil
-	}
-	task := &ImageTask{
-		ID:             t.ID,
-		UserID:         int(t.UserID),
-		Status:         t.Status.String(),
-		ErrorMessage:   t.ErrorMessage,
-		CreatedAt:      t.CreatedAt,
-		UpdatedAt:      t.UpdatedAt,
-		CompletedAt:    t.CompletedAt,
-		ConversationID: int64FromMap(t.Input, "conversation_id"),
-		GroupID:        int64FromMap(t.Input, "group_id"),
-		Platform:       stringFromMap(t.Input, "platform"),
-		Model:          stringFromMap(t.Input, "model"),
-		Prompt:         stringFromMap(t.Input, "prompt"),
-		ImageSize:      stringFromMap(t.Input, "image_size"),
-		Mode:           stringFromMap(t.Input, "mode"),
-		ResultContent:  stringFromMap(t.Output, "content"),
-		InputTokens:    intFromMap(t.Output, "input_tokens"),
-		OutputTokens:   intFromMap(t.Output, "output_tokens"),
-		Cost:           float64FromMap(t.Output, "cost"),
-	}
-	return task
-}
-
-func stringFromMap(m map[string]interface{}, key string) string {
-	v, _ := m[key].(string)
-	return v
-}
-
-func int64FromMap(m map[string]interface{}, key string) int64 {
-	switch v := m[key].(type) {
-	case int64:
-		return v
-	case int:
-		return int64(v)
-	case float64:
-		return int64(v)
-	default:
-		return 0
-	}
-}
-
-func intFromMap(m map[string]interface{}, key string) int {
-	return int(int64FromMap(m, key))
-}
-
-func float64FromMap(m map[string]interface{}, key string) float64 {
-	switch v := m[key].(type) {
-	case float64:
-		return v
-	case int64:
-		return float64(v)
-	case int:
-		return float64(v)
-	default:
-		return 0
-	}
-}
-
-func (p *Plugin) handleListImageTasks(w http.ResponseWriter, r *http.Request) {
+func (p *Plugin) handleListGenerationTasks(w http.ResponseWriter, r *http.Request) {
 	userID := parseUserID(r)
-	result, err := hostListTasks(r.Context(), p.host, int64(userID), "image_generation", 50)
+	result, err := hostListTasks(r.Context(), p.host, int64(userID), generationTaskType, 100)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -600,9 +481,9 @@ func (p *Plugin) handleListImageTasks(w http.ResponseWriter, r *http.Request) {
 	convIDStr := r.URL.Query().Get("conversation_id")
 	convID, _ := strconv.ParseInt(convIDStr, 10, 64)
 
-	tasks := make([]*ImageTask, 0)
+	tasks := make([]*GenerationTask, 0)
 	for _, t := range result.Tasks {
-		task := coreTaskToImageTask(t)
+		task := coreTaskToGenerationTask(t)
 		if convID > 0 && task.ConversationID != convID {
 			continue
 		}
@@ -778,27 +659,6 @@ func imageContentTypeForObjectKey(objectKey string) string {
 		return "image/gif"
 	default:
 		return "image/png"
-	}
-}
-
-func parseMultipartStringField(body []byte, contentType, field string) string {
-	_, params, err := mime.ParseMediaType(contentType)
-	if err != nil || params["boundary"] == "" {
-		return ""
-	}
-	reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
-	for {
-		part, err := reader.NextPart()
-		if err != nil {
-			return ""
-		}
-		if part.FormName() != field {
-			_ = part.Close()
-			continue
-		}
-		data, _ := io.ReadAll(part)
-		_ = part.Close()
-		return strings.TrimSpace(string(data))
 	}
 }
 

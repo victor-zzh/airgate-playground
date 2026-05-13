@@ -7,13 +7,9 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import {
-  api,
-  chatCompletion,
-  editImage as requestImageEdit,
-} from '../../api';
-import type { ImageTask, ModelInfo, PlatformInfo, UserInfo } from '../../api';
-import type { GalleryItem, GenerationTask, ImageMode, MediaType } from './types';
+import { api } from '../../api';
+import type { GenerationTask, ModelInfo, PlatformInfo, UserInfo } from '../../api';
+import type { GalleryItem, StudioGenerationTask, ImageMode, MediaType } from './types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -44,6 +40,23 @@ function splitModelValue(value: string): { platform: string; modelId: string } {
   const idx = value.indexOf('::');
   if (idx === -1) return { platform: '', modelId: value };
   return { platform: value.slice(0, idx), modelId: value.slice(idx + 2) };
+}
+
+function operationToImageMode(operation: string): ImageMode {
+  if (operation === 'inpaint') return 'inpaint';
+  if (operation === 'edit') return 'img2img';
+  return 'text2img';
+}
+
+function modeToOperation(mode: ImageMode): 'generate' | 'edit' | 'inpaint' {
+  if (mode === 'inpaint') return 'inpaint';
+  if (mode === 'img2img') return 'edit';
+  return 'generate';
+}
+
+function taskSize(task: GenerationTask): string | undefined {
+  const value = task.parameters?.size;
+  return typeof value === 'string' ? value : undefined;
 }
 
 async function delay(ms: number, signal: AbortSignal): Promise<void> {
@@ -98,17 +111,17 @@ async function createMaskDataUrl(
   return canvas.toDataURL('image/png');
 }
 
-async function pollImageTask(
+async function pollGenerationTask(
   taskId: number,
   signal: AbortSignal,
   maxAttempts = POLL_MAX_ATTEMPTS,
-): Promise<ImageTask> {
+): Promise<GenerationTask> {
   let networkErrors = 0;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-    let task: ImageTask | null = null;
+    let task: GenerationTask | null = null;
     try {
-      task = await api.getImageTask(taskId);
+      task = await api.getGenerationTask(taskId);
       networkErrors = 0;
     } catch (err) {
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -155,7 +168,7 @@ export interface StudioContextValue {
 
   // Generation
   isGenerating: boolean;
-  tasks: GenerationTask[];
+  tasks: StudioGenerationTask[];
   generate: (
     prompt: string,
     options?: {
@@ -205,7 +218,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
 
   // Generation
   const [isGenerating, setIsGenerating] = useState(false);
-  const [tasks, setTasks] = useState<GenerationTask[]>([]);
+  const [tasks, setTasks] = useState<StudioGenerationTask[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
   // Gallery
@@ -225,7 +238,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
 
   const recoverTasks = useCallback(async (signal: AbortSignal) => {
     try {
-      const allTasks = await api.listImageTasks();
+      const allTasks = await api.listGenerationTasks();
       if (signal.aborted) return;
 
       const completed = allTasks.filter(t => t.status === 'completed' && t.result_content);
@@ -239,8 +252,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
             alt: img.alt,
             prompt: t.prompt,
             model: t.model,
-            mode: (t.mode as ImageMode) || 'text2img',
-            size: t.image_size,
+            mode: operationToImageMode(t.operation),
+            size: taskSize(t),
             createdAt: t.completed_at || t.updated_at,
           });
         }
@@ -256,7 +269,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         ...failed.map(t => ({
           id: `r-${t.id}`,
           prompt: t.prompt,
-          mode: (t.mode as ImageMode) || 'text2img',
+          mode: operationToImageMode(t.operation),
           status: 'failed' as const,
           error: t.error_message || 'Image generation task failed',
           createdAt: t.created_at,
@@ -264,7 +277,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         ...inFlight.map(t => ({
           id: `r-${t.id}`,
           prompt: t.prompt,
-          mode: (t.mode as ImageMode) || 'text2img',
+          mode: operationToImageMode(t.operation),
           status: 'processing' as const,
           createdAt: t.created_at,
         })),
@@ -275,7 +288,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       activeCountRef.current = inFlight.length;
       for (const t of inFlight) {
         const taskUiId = `r-${t.id}`;
-        pollImageTask(t.id, signal)
+        pollGenerationTask(t.id, signal)
           .then(done => {
             if (signal.aborted) return;
             const imgs = parseMarkdownImages(done.result_content || '');
@@ -286,8 +299,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
                 alt: img.alt,
                 prompt: t.prompt,
                 model: t.model,
-                mode: (t.mode as ImageMode) || 'text2img',
-                size: t.image_size,
+                mode: operationToImageMode(t.operation),
+                size: taskSize(t),
                 createdAt: done.completed_at || new Date().toISOString(),
               })),
               ...prev,
@@ -371,7 +384,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       const now = new Date().toISOString();
       const mode = imageMode;
 
-      const task: GenerationTask = {
+      const task: StudioGenerationTask = {
         id: taskId,
         prompt,
         mode,
@@ -383,7 +396,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       activeCountRef.current += 1;
       setIsGenerating(true);
 
-      const updateTask = (patch: Partial<GenerationTask>) => {
+      const updateTask = (patch: Partial<StudioGenerationTask>) => {
         setTasks(prev => prev.map(t => (t.id === taskId ? { ...t, ...patch } : t)));
       };
 
@@ -397,13 +410,15 @@ export function StudioProvider({ children }: { children: ReactNode }) {
             : Array.from({ length: options?.count ?? 4 }, () => prompt);
 
           const batchTasks = prompts.map(async (p) => {
-            const created = await api.createImageTask({
+            const created = await api.createGenerationTask({
+              kind: 'image',
+              operation: 'generate',
               platform: selectedPlatform,
               model: selectedModelId,
               prompt: p,
-              image_size: imageSize || undefined,
+              parameters: imageSize ? { size: imageSize } : undefined,
             });
-            const completed = await pollImageTask(created.id, signal);
+            const completed = await pollGenerationTask(created.id, signal);
             return parseMarkdownImages(completed.result_content || '').map(img => ({ ...img, prompt: p }));
           });
 
@@ -434,30 +449,31 @@ export function StudioProvider({ children }: { children: ReactNode }) {
 
         } else {
           // text2img / img2img / inpaint — 统一走 task 系统
-          const taskData: Parameters<typeof api.createImageTask>[0] = {
+          const taskData: Parameters<typeof api.createGenerationTask>[0] = {
+            kind: 'image',
+            operation: modeToOperation(mode),
             platform: selectedPlatform,
             model: selectedModelId,
             prompt,
-            image_size: imageSize || undefined,
-            mode,
+            parameters: imageSize ? { size: imageSize } : undefined,
           };
 
           if (mode === 'img2img' || mode === 'inpaint') {
             const sourceUrl = options?.sourceImage ?? referenceImage ?? '';
             if (!sourceUrl && mode === 'inpaint') throw new Error('Inpaint requires a source image');
             if (sourceUrl) {
-              taskData.source_image = await imageUrlToDataUrl(sourceUrl);
+              taskData.inputs = [{ type: 'image', role: 'source', url: await imageUrlToDataUrl(sourceUrl) }];
             }
           }
 
           if (mode === 'inpaint' && options?.maskRegion) {
             const sourceUrl = options?.sourceImage ?? referenceImage ?? '';
-            taskData.mask = await createMaskDataUrl(sourceUrl, options.maskRegion);
+            taskData.mask = { type: 'image', role: 'mask', url: await createMaskDataUrl(sourceUrl, options.maskRegion) };
           }
 
-          const created = await api.createImageTask(taskData);
+          const created = await api.createGenerationTask(taskData);
           if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-          const completed = await pollImageTask(created.id, signal);
+          const completed = await pollGenerationTask(created.id, signal);
           const images = parseMarkdownImages(completed.result_content || '');
 
           const galleryItems: GalleryItem[] = images.map(img => ({

@@ -1,10 +1,10 @@
-import type { ChatMessageContent, ImageEditResponse, Message, ModelInfo } from '../api';
+import type { ChatMessageContent, ModelInfo } from '../api';
 import type { BlobUrlRegistry, EditImage, EditSelectionRect, ImageEditAnnotation, ImageSizeSettings, PendingImage, PreviewImage } from './types';
 import {
   BASE64_DATA_URL_RE, DATA_IMAGE_RE, GPT_IMAGE_MAX_PIXELS, GPT_IMAGE_MAX_SIDE,
   GPT_IMAGE_MIN_PIXELS, IMAGE_EDIT_ANNOTATION_RE, IMAGE_MARKDOWN_ITEM_RE,
-  IMAGE_MARKDOWN_RE, IMAGE_MARKDOWN_TEST_RE, IMAGE_SIZE_AUTO,
-  MAX_IMAGE_BYTES, MAX_IMAGE_SHOTS, MIN_SELECTION_SIZE,
+  IMAGE_MARKDOWN_RE, IMAGE_SIZE_AUTO,
+  MAX_IMAGE_BYTES, MIN_SELECTION_SIZE,
   DEFAULT_MODEL_ID, ACTIVE_CONVERSATION_STORAGE_KEY, SELECTED_MODEL_STORAGE_KEY,
 } from './constants';
 
@@ -136,10 +136,6 @@ export function stripImagePlannerNoise(content: string) {
 
 export function copyableMessageText(content: string) {
   return stripImageEditAnnotations(content).replace(IMAGE_MARKDOWN_RE, '[Image]').trim() || '[Image]';
-}
-
-export function messageHasGeneratedImage(content: string) {
-  return IMAGE_MARKDOWN_TEST_RE.test(content);
 }
 
 export function encodeImageEditAnnotation(annotation: ImageEditAnnotation) {
@@ -340,87 +336,6 @@ export async function editImageFromUrl(url: string, alt: string): Promise<EditIm
   const filename = imageFilename(alt || 'generated-image', url);
   const file = new File([blob], filename, { type });
   return editImageFromFile(file);
-}
-
-export function generatedImageUrlFromEdit(response: ImageEditResponse) {
-  const image = response.data?.[0];
-  if (!image) return '';
-  if (image.url) return image.url;
-  if (image.b64_json) return `data:image/png;base64,${image.b64_json}`;
-  return '';
-}
-
-export function imageEditAssistantContent(response: ImageEditResponse, fallbackAlt: string) {
-  const url = generatedImageUrlFromEdit(response);
-  if (!url) return '';
-  const revisedPrompt = response.data?.[0]?.revised_prompt?.trim();
-  return [revisedPrompt, `![${escapeMarkdownAlt(fallbackAlt)}](${url})`].filter(Boolean).join('\n\n');
-}
-
-export function imageEditUsage(response: ImageEditResponse) {
-  return {
-    input_tokens: response.usage?.prompt_tokens || response.usage?.input_tokens || 0,
-    output_tokens: response.usage?.completion_tokens || response.usage?.output_tokens || 0,
-    cost: response.usage?.cost || 0,
-  };
-}
-
-export function appendImageContent(content: string, nextImageContent: string) {
-  return [content.trim(), nextImageContent.trim()].filter(Boolean).join('\n\n');
-}
-
-export function replaceImageMarkdownAtIndex(content: string, imageIndex: number, nextImageMarkdown: string) {
-  let currentIndex = -1;
-  IMAGE_MARKDOWN_RE.lastIndex = 0;
-  const nextContent = content.replace(IMAGE_MARKDOWN_RE, (match) => {
-    currentIndex += 1;
-    return currentIndex === imageIndex ? nextImageMarkdown : match;
-  });
-  IMAGE_MARKDOWN_RE.lastIndex = 0;
-  return currentIndex >= imageIndex ? nextContent : content;
-}
-
-export function normalizeImageShotPrompts(prompts: string[]) {
-  return prompts
-    .map(prompt => prompt.trim())
-    .filter(Boolean)
-    .slice(0, MAX_IMAGE_SHOTS)
-    .map((prompt, index, prompts) => [
-      `Shot ${index + 1} of ${prompts.length}. Generate exactly one standalone image for this shot.`,
-      'Do not create a collage, grid, contact sheet, split-screen, infographic, or multi-panel layout.',
-      prompt,
-    ].join(' '));
-}
-
-export function parseImageShotPlan(content?: string) {
-  if (!content) return [];
-  try {
-    const parsed = JSON.parse(content) as { shots?: unknown };
-    if (!Array.isArray(parsed.shots)) return [];
-    return normalizeImageShotPrompts(parsed.shots.map(item => typeof item === 'string' ? item : ''));
-  } catch {
-    return [];
-  }
-}
-
-export function contentWithImageShotPrompt(content: string, prompt: string) {
-  IMAGE_MARKDOWN_RE.lastIndex = 0;
-  const match = IMAGE_MARKDOWN_RE.exec(content);
-  IMAGE_MARKDOWN_RE.lastIndex = 0;
-  if (!match) return prompt;
-  return [prompt, content.slice(match.index).trim()].filter(Boolean).join('\n\n');
-}
-
-export function imageShotRequestMessages(messages: Message[], prompt: string) {
-  const nextMessages = messages.map(msg => ({ ...msg }));
-  const userIndex = nextMessages.map(msg => msg.role).lastIndexOf('user');
-  if (userIndex >= 0) {
-    nextMessages[userIndex] = {
-      ...nextMessages[userIndex],
-      content: contentWithImageShotPrompt(nextMessages[userIndex].content, prompt),
-    };
-  }
-  return nextMessages;
 }
 
 export function titleFromMessageContent(content: string) {

@@ -80,11 +80,11 @@ func (p *Plugin) Start(ctx context.Context) error {
 	return nil
 }
 
-// reconcileCompletedTasks checks Core for completed image tasks whose results
+// reconcileCompletedTasks checks Core for completed generation tasks whose results
 // may not have been persisted to conversation messages (e.g. service restarted
 // mid-processing). It runs once on startup.
 func (p *Plugin) reconcileCompletedTasks(ctx context.Context) {
-	result, err := hostListTasks(ctx, p.host, 0, "image_generation", 100)
+	result, err := hostListTasks(ctx, p.host, 0, generationTaskType, 100)
 	if err != nil {
 		p.logger.Warn("reconcile: failed to list completed tasks", "error", err)
 		return
@@ -157,7 +157,7 @@ func (p *Plugin) BackgroundTasks() []sdk.BackgroundTask {
 // TaskProcessor implementation — Core dispatches tasks here.
 
 func (p *Plugin) TaskTypes() []string {
-	return []string{"image_generation"}
+	return []string{generationTaskType}
 }
 
 func (p *Plugin) ProcessTask(ctx context.Context, task sdk.HostTask) error {

@@ -37,15 +37,15 @@ function parseMarkdownImages(text: string): Array<{ url: string; alt: string }> 
  * Poll an image task until it reaches a terminal state.
  * Polls every 2 seconds for up to `maxAttempts` iterations.
  */
-async function pollImageTask(
+async function pollGenerationTask(
   taskId: number,
   signal: AbortSignal,
   maxAttempts = 120,
-): Promise<import('../../api').ImageTask> {
+): Promise<import('../../api').GenerationTask> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
 
-    const task = await api.getImageTask(taskId);
+    const task = await api.getGenerationTask(taskId);
 
     if (task.status === 'completed') return task;
     if (task.status === 'failed') {
@@ -90,6 +90,15 @@ function canvasToBlobUrl(canvas: HTMLCanvasElement, type = 'image/png'): Promise
   });
 }
 
+function blobToDataURL(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('读取图片失败'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 // ─── Core image-generation logic (shared by image_generate & batch_generate) ─
 
 async function generateSingleImage(
@@ -97,16 +106,18 @@ async function generateSingleImage(
   size: string,
   context: ExecutionContext,
 ): Promise<Array<{ url: string; alt: string }>> {
-  const task = await api.createImageTask({
+  const task = await api.createGenerationTask({
     conversation_id: context.conversationId,
+    kind: 'image',
+    operation: 'generate',
     platform: context.platform,
     model: context.model,
     prompt,
-    image_size: size || undefined,
+    parameters: size ? { size } : undefined,
     group_id: context.groupId,
   });
 
-  await pollImageTask(task.id, context.signal);
+  await pollGenerationTask(task.id, context.signal);
 
   // Fetch messages from the conversation to extract image URLs
   const messages = await api.listMessages(context.conversationId);
@@ -191,39 +202,30 @@ async function imageEditExecutor(
 
   if (!prompt) throw new Error('Image Edit: a prompt is required');
 
-  // Attempt to use the native image-edit API (multipart/form-data).
-  // We fetch the source image first so we can send it as a File blob.
-  try {
-    const { editImage } = await import('../../api');
-
-    const imageResp = await fetch(sourceUrl);
-    if (!imageResp.ok) throw new Error('Could not fetch source image for editing');
-    const imageBlob = await imageResp.blob();
-    const imageFile = new File([imageBlob], 'source.png', { type: imageBlob.type || 'image/png' });
-
-    const form = new FormData();
-    form.append('image', imageFile);
-    form.append('prompt', prompt);
-    form.append('model', context.model);
-    if (context.imageSize) form.append('size', context.imageSize);
-
-    const editResponse = await editImage(context.platform, form, context.signal);
-
-    const resultUrl = editResponse.data?.[0]?.url;
-    if (!resultUrl) throw new Error('Image edit API returned no image URL');
-
-    return { images: [{ url: resultUrl, alt: 'Edited image' }] };
-  } catch (editErr) {
-    // Fall back to text-based generation: incorporate the source image URL
-    // into the prompt and run a normal generation task.
-    const fallbackPrompt = `${prompt}\n\nReference image: ${sourceUrl}`;
-    const size =
-      (data.values.size as string | undefined) ||
-      context.imageSize ||
-      'auto';
-    const images = await generateSingleImage(fallbackPrompt, size, context);
-    return { images };
+  const imageResp = await fetch(sourceUrl);
+  if (!imageResp.ok) throw new Error('Could not fetch source image for editing');
+  const sourceDataURL = await blobToDataURL(await imageResp.blob());
+  const size =
+    (data.values.size as string | undefined) ||
+    context.imageSize ||
+    'auto';
+  const task = await api.createGenerationTask({
+    conversation_id: context.conversationId,
+    kind: 'image',
+    operation: 'edit',
+    platform: context.platform,
+    model: context.model,
+    prompt,
+    group_id: context.groupId,
+    parameters: size ? { size } : undefined,
+    inputs: [{ type: 'image', role: 'source', url: sourceDataURL }],
+  });
+  const completed = await pollGenerationTask(task.id, context.signal);
+  const images = parseMarkdownImages(completed.result_content || '');
+  if (images.length === 0) {
+    throw new Error('No images found in the assistant response');
   }
+  return { images };
 }
 
 async function conditionalExecutor(

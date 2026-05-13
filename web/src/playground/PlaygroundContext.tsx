@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, chatCompletion, chatCompletionsStream, editImage as requestImageEdit } from '../api';
+import { api, chatCompletionsStream } from '../api';
 import type {
   BlobUrlRegistry,
   CanvasImage,
@@ -17,7 +17,7 @@ import type {
   SelectOption,
   StreamAssistantOptions,
   Conversation,
-  ImageTask,
+  GenerationTask,
   Message,
   ModelInfo,
   PlatformInfo,
@@ -31,43 +31,32 @@ import {
   CANVAS_MODE_STORAGE_KEY,
   DEFAULT_IMAGE_SIZE_SETTINGS,
   DRAFT_CONVERSATION_ID,
-  IMAGE_PROMPT_PLANNER_MODEL,
-  IMAGE_PROMPT_PLANNER_PLATFORM,
-  MAX_IMAGE_SHOTS,
   MOBILE_BREAKPOINT,
   SELECTED_MODEL_STORAGE_KEY,
   STUDIO_MODE_STORAGE_KEY,
   THINKING_VISIBLE_STORAGE_KEY,
 } from './constants';
 import {
-  appendImageContent,
   canvasToBlob,
   clampNumber,
-  contentWithImageShotPrompt,
   copyableMessageText,
   copyText,
   defaultModelOptionValue,
   downloadImage,
   editImageFromFile,
   editImageFromUrl,
-  escapeMarkdownAlt,
-  generatedImageUrlFromEdit,
   generatedImages,
   getStoredActiveConversationId,
   getStoredSelectedModel,
   hasCopyableMessageText,
-  imageEditAssistantContent,
-  imageEditUsage,
-  imageShotRequestMessages,
   imagesFromFiles,
   isImageModel,
   isUsableSelection,
   loadImageElement,
   messageContentWithImages,
-  messageHasGeneratedImage,
   modelOptionValue,
   parseImageEditAnnotations,
-  parseImageShotPlan,
+  fileToDataURL,
   readLocalStorageValue,
   replaceBase64WithBlobUrls,
   replaceBlobUrlsWithBase64,
@@ -92,6 +81,15 @@ declare global {
       confirm?: (message: string, options?: { title?: string; danger?: boolean }) => Promise<boolean>;
     };
   }
+}
+
+function blobToDataURL(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('读取图片失败'));
+    reader.readAsDataURL(blob);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -215,8 +213,8 @@ export interface PlaygroundContextValue {
 
   // Canvas
   canvasTaskStatus: 'idle' | 'pending' | 'processing';
-  canvasTasks: ImageTask[];
-  setCanvasTasks: React.Dispatch<React.SetStateAction<ImageTask[]>>;
+  canvasTasks: GenerationTask[];
+  setCanvasTasks: React.Dispatch<React.SetStateAction<GenerationTask[]>>;
   expandedPromptNodeId: string | null;
   setExpandedPromptNodeId: React.Dispatch<React.SetStateAction<string | null>>;
   canvasZoom: number;
@@ -248,7 +246,7 @@ export interface PlaygroundContextValue {
   streamAssistantResponse: (options: StreamAssistantOptions) => Promise<void>;
   sendMessage: () => Promise<void>;
   sendCanvasMessage: () => Promise<void>;
-  pollImageTask: (taskId: number, conversationID: number) => Promise<ImageTask | undefined>;
+  pollGenerationTask: (taskId: number, conversationID: number) => Promise<GenerationTask | undefined>;
   regenerateCanvasNode: (node: CanvasWorkflowNode) => Promise<void>;
   addImageFiles: (files: File[]) => Promise<void>;
   handleImageChange: (e: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
@@ -334,7 +332,7 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
   const [streamReasoning, setStreamReasoning] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [canvasTaskStatus, setCanvasTaskStatus] = useState<'idle' | 'pending' | 'processing'>('idle');
-  const [canvasTasks, setCanvasTasks] = useState<ImageTask[]>([]);
+  const [canvasTasks, setCanvasTasks] = useState<GenerationTask[]>([]);
   const [expandedPromptNodeId, setExpandedPromptNodeId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
@@ -580,7 +578,7 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
       return;
     }
     let cancelled = false;
-    api.listImageTasks(activeId)
+    api.listGenerationTasks(activeId)
       .then(tasks => {
         if (!cancelled) setCanvasTasks(tasks);
       })
@@ -594,14 +592,14 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
   useEffect(() => {
     if (!canvasMode || !activeId || activeId === DRAFT_CONVERSATION_ID || isStreaming) return;
     let cancelled = false;
-    api.listImageTasks(activeId).then(tasks => {
+    api.listGenerationTasks(activeId).then(tasks => {
       if (cancelled) return;
       setCanvasTasks(tasks);
       const inflight = tasks.find(t => t.status === 'pending' || t.status === 'processing');
       if (inflight) {
         setIsStreaming(true);
         setStreamConversationId(activeId);
-        pollImageTask(inflight.id, activeId)
+        pollGenerationTask(inflight.id, activeId)
           .then(() => { api.getUserInfo().then(setUserInfo).catch(() => {}); })
           .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'generation failed'); })
           .finally(() => { if (!cancelled) { setIsStreaming(false); setStreamConversationId(null); } });
@@ -994,8 +992,6 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
     model,
     groupID,
     platform,
-    isImageRequest,
-    imageSize,
     supportsReasoning: requestSupportsReasoning,
     reasoningEffort: requestReasoningEffort,
     titleContent,
@@ -1006,8 +1002,6 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
       model,
       groupID,
       platform,
-      isImageRequest,
-      imageSize,
       supportsReasoning: requestSupportsReasoning,
       reasoningEffort: requestReasoningEffort,
     };
@@ -1032,7 +1026,6 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
           content: toChatMessageContent(msg.role, replaceBlobUrlsWithBase64(msg.content, blobUrlRegistryRef.current)),
         })),
         stream: true as const,
-        ...(isImageRequest && imageSize ? { size: imageSize } : {}),
         ...(requestSupportsReasoning ? { reasoning_effort: requestReasoningEffort ?? reasoningEffort } : {}),
       };
       const finishAssistantResponse = async (usage: { input_tokens: number; output_tokens: number; model: string; cost: number }) => {
@@ -1079,110 +1072,6 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
         setIsStreaming(false);
       };
 
-      if (isImageRequest) {
-        const lastUserMessage = requestMessages.filter(msg => msg.role === 'user').at(-1);
-        const userPrompt = lastUserMessage ? stripImagePlannerNoise(lastUserMessage.content) : '';
-        let finalShotPrompts = [userPrompt || 'Generate the requested image.'];
-        const planResponse = await chatCompletion(
-          IMAGE_PROMPT_PLANNER_PLATFORM,
-          {
-            model: IMAGE_PROMPT_PLANNER_MODEL,
-            messages: [
-              {
-                role: 'system',
-                content: [
-                  `Analyze the user's intent and convert the image-generation request into 1 to ${MAX_IMAGE_SHOTS} standalone image prompts.`,
-                  'Return only JSON with a shots array of strings.',
-                  'The number of strings in shots is the number of images to generate: one string means one image, multiple strings mean multiple separate images.',
-                  'Use one shot only when the user wants one final image/composite. Use multiple shots when the user wants multiple deliverables, separate scenes, separate assets, variants, product angles, lifestyle scenes, feature diagrams, packaging views, story frames, or a set/series of images.',
-                  'Do not merge separate requested images into one collage, grid, contact sheet, split-screen, infographic, poster, or multi-panel layout unless the user explicitly asks for a single combined image.',
-                  'Each shot must be a complete prompt for exactly one standalone image.',
-                ].join(' '),
-              },
-              { role: 'user', content: userPrompt || 'Generate the requested image.' },
-            ],
-            stream: false,
-            response_format: { type: 'json_object' },
-          },
-          abort.signal,
-        );
-        if (abort.signal.aborted) return;
-        const plannerContent = planResponse.choices?.[0]?.message?.content;
-        const shotPrompts = parseImageShotPlan(plannerContent);
-        finalShotPrompts = shotPrompts.length ? shotPrompts : finalShotPrompts;
-        console.info('[image-planner]', {
-          raw: plannerContent,
-          parsedCount: shotPrompts.length,
-          parsedShots: shotPrompts,
-          finalCount: finalShotPrompts.length,
-          finalShots: finalShotPrompts,
-        });
-        const planUsage = {
-          input_tokens: planResponse.usage?.prompt_tokens || planResponse.usage?.input_tokens || 0,
-          output_tokens: planResponse.usage?.completion_tokens || planResponse.usage?.output_tokens || 0,
-          model: planResponse.model || IMAGE_PROMPT_PLANNER_MODEL,
-          cost: planResponse.usage?.cost || 0,
-        };
-        const requests = finalShotPrompts.map(prompt => new Promise<{ input_tokens: number; output_tokens: number; model: string; cost: number }>((resolve, reject) => {
-          let localContent = '';
-          let appended = false;
-          const appendLocalContent = () => {
-            if (appended || !localContent.trim()) return;
-            accumulated = appendImageContent(accumulated, localContent);
-            setStreamContent(accumulated);
-            appended = true;
-          };
-
-          void chatCompletionsStream(
-            platform,
-            {
-              ...baseRequest,
-              messages: imageShotRequestMessages(requestMessages, prompt).map(msg => ({
-                role: msg.role,
-                content: toChatMessageContent(msg.role, replaceBlobUrlsWithBase64(msg.content, blobUrlRegistryRef.current)),
-              })),
-              n: 1,
-            },
-            {
-              onData: (text) => {
-                localContent += replaceBase64WithBlobUrls(text, blobUrlRegistryRef.current);
-                if (messageHasGeneratedImage(localContent)) appendLocalContent();
-              },
-              onReasoning: (text) => {
-                accumulatedReasoning += text;
-                setStreamReasoning(accumulatedReasoning);
-              },
-              onDone: (usage) => {
-                appendLocalContent();
-                resolve(usage);
-              },
-              onError: (err) => reject(new Error(err)),
-            },
-            abort.signal,
-          ).catch(reject);
-        }));
-
-        const results = await Promise.allSettled(requests);
-        if (abort.signal.aborted) return;
-        const fulfilledUsages = results.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
-        const failedCount = results.length - fulfilledUsages.length;
-        if (failedCount && !accumulated) {
-          const failure = results.find(result => result.status === 'rejected');
-          throw failure?.status === 'rejected' && failure.reason instanceof Error ? failure.reason : new Error('stream failed');
-        }
-        const usage = fulfilledUsages.reduce((total, item) => ({
-          input_tokens: total.input_tokens + item.input_tokens,
-          output_tokens: total.output_tokens + item.output_tokens,
-          model: item.model || total.model,
-          cost: total.cost + item.cost,
-        }), planUsage);
-        await finishAssistantResponse(usage);
-        if (failedCount && activeIdRef.current === conversationID) {
-          setError(`${failedCount} image${failedCount === 1 ? '' : 's'} failed to generate`);
-        }
-        return;
-      }
-
       await chatCompletionsStream(
         platform,
         {
@@ -1224,6 +1113,40 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
       streamContextRef.current = null;
     }
   }, [reasoningEffort, t]);
+
+  // ── pollGenerationTask ─────────────────────────────────────────────────────
+
+  const pollGenerationTask = useCallback(async (taskId: number, conversationID: number) => {
+    const maxAttempts = 120;
+    setCanvasTaskStatus('pending');
+    try {
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+          const task = await api.getGenerationTask(taskId);
+          if (task.status === 'processing') setCanvasTaskStatus('processing');
+          setCanvasTasks(prev => prev.map(item => item.id === task.id ? task : item));
+          if (task.status === 'completed') {
+            if (activeIdRef.current === conversationID) {
+              const msgs = await api.listMessages(conversationID);
+              const tasks = await api.listGenerationTasks(conversationID);
+              setMessages(msgs);
+              setCanvasTasks(tasks);
+            }
+            return task;
+          }
+          if (task.status === 'failed') {
+            throw new Error(task.error_message || 'Image generation failed');
+          }
+        } catch (e) {
+          if (i === maxAttempts - 1) throw e;
+        }
+      }
+      throw new Error('Image generation timed out');
+    } finally {
+      setCanvasTaskStatus('idle');
+    }
+  }, [setMessages]);
 
   // ── sendMessage ───────────────────────────────────────────────────────
 
@@ -1291,6 +1214,45 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
         }
         setConversations(prev => [conv, ...prev.filter(c => c.id !== DRAFT_CONVERSATION_ID)]);
       }
+
+      if (selectedModelIsImage) {
+        const prompt = input.trim() || '根据参考图生成图像。';
+        const task = await api.createGenerationTask({
+          conversation_id: conversationID,
+          kind: 'image',
+          operation: pendingImages.length > 0 ? 'edit' : 'generate',
+          platform: selectedPlatform,
+          model: selectedModelID,
+          prompt,
+          group_id: groupID,
+          parameters: resolvedImageSize ? { size: resolvedImageSize } : undefined,
+          inputs: pendingImages.length
+            ? pendingImages.map(image => ({ type: 'image' as const, role: 'source', url: image.url }))
+            : undefined,
+          message_content: content,
+        });
+        if (canvasMode) {
+          setCanvasTasks(prev => [task, ...prev.filter(item => item.id !== task.id)]);
+        }
+        const msgs = await api.listMessages(conversationID);
+        if (activeIdRef.current === conversationID) {
+          setMessages(msgs);
+        }
+        setConversations(prev => prev.map(c =>
+          c.id === conversationID && !c.title
+            ? { ...c, title: titleFromMessageContent(content), updated_at: new Date().toISOString() }
+            : c
+        ));
+        await pollGenerationTask(task.id, conversationID);
+        api.getUserInfo().then(setUserInfo).catch(() => {});
+        setIsStreaming(false);
+        setStreamContent('');
+        setStreamReasoning('');
+        setStreamConversationId(null);
+        streamContextRef.current = null;
+        return;
+      }
+
       await api.persistMessage({
         conversation_id: conversationID,
         role: 'user',
@@ -1307,8 +1269,6 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
         model: selectedModelID,
         groupID,
         platform: selectedPlatform,
-        isImageRequest: selectedModelIsImage,
-        imageSize: selectedModelIsImage ? resolvedImageSize : undefined,
         supportsReasoning: selectedModelSupportsReasoning,
         reasoningEffort,
         titleContent: content,
@@ -1323,41 +1283,7 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
       setStreamConversationId(null);
       streamContextRef.current = null;
     }
-  }, [activeId, input, isStreaming, messages, pendingImages, reasoningEffort, resolveGroupID, resolvedImageSize, selectedPlatform, selectedModelID, selectedModelIsImage, selectedModelSupportsReasoning, streamAssistantResponse]);
-
-  // ── pollImageTask ─────────────────────────────────────────────────────
-
-  const pollImageTask = useCallback(async (taskId: number, conversationID: number) => {
-    const maxAttempts = 120;
-    setCanvasTaskStatus('pending');
-    try {
-      for (let i = 0; i < maxAttempts; i++) {
-        await new Promise(r => setTimeout(r, 2000));
-        try {
-          const task = await api.getImageTask(taskId);
-          if (task.status === 'processing') setCanvasTaskStatus('processing');
-          setCanvasTasks(prev => prev.map(item => item.id === task.id ? task : item));
-          if (task.status === 'completed') {
-            if (activeIdRef.current === conversationID) {
-              const msgs = await api.listMessages(conversationID);
-              const tasks = await api.listImageTasks(conversationID);
-              setMessages(msgs);
-              setCanvasTasks(tasks);
-            }
-            return task;
-          }
-          if (task.status === 'failed') {
-            throw new Error(task.error_message || 'Image generation failed');
-          }
-        } catch (e) {
-          if (i === maxAttempts - 1) throw e;
-        }
-      }
-      throw new Error('Image generation timed out');
-    } finally {
-      setCanvasTaskStatus('idle');
-    }
-  }, [setMessages]);
+  }, [activeId, canvasMode, input, isStreaming, messages, pendingImages, pollGenerationTask, reasoningEffort, resolveGroupID, resolvedImageSize, selectedPlatform, selectedModelID, selectedModelIsImage, selectedModelSupportsReasoning, streamAssistantResponse]);
 
   // ── sendCanvasMessage ─────────────────────────────────────────────────
 
@@ -1397,12 +1323,14 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
         setConversations(prev => [conv, ...prev.filter(c => c.id !== DRAFT_CONVERSATION_ID)]);
       }
 
-      const task = await api.createImageTask({
+      const task = await api.createGenerationTask({
         conversation_id: conversationID,
+        kind: 'image',
+        operation: 'generate',
         platform: selectedPlatform,
         model: selectedModelID,
         prompt,
-        image_size: resolvedImageSize,
+        parameters: resolvedImageSize ? { size: resolvedImageSize } : undefined,
         group_id: resolveGroupID(),
       });
       setCanvasTasks(prev => [task, ...prev.filter(item => item.id !== task.id)]);
@@ -1414,7 +1342,7 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
       }
 
       // Poll for completion
-      await pollImageTask(task.id, conversationID);
+      await pollGenerationTask(task.id, conversationID);
 
       // Update user info (balance)
       api.getUserInfo().then(setUserInfo).catch(() => {});
@@ -1427,7 +1355,7 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
       setIsStreaming(false);
       setStreamConversationId(null);
     }
-  }, [activeId, input, isStreaming, resolveGroupID, resolvedImageSize, selectedModelID, selectedPlatform, pollImageTask]);
+  }, [activeId, input, isStreaming, resolveGroupID, resolvedImageSize, selectedModelID, selectedPlatform, pollGenerationTask]);
 
   // ── regenerateCanvasNode ──────────────────────────────────────────────
 
@@ -1442,18 +1370,20 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
     setStreamConversationId(activeId);
 
     try {
-      const task = await api.createImageTask({
+      const task = await api.createGenerationTask({
         conversation_id: activeId,
+        kind: 'image',
+        operation: 'generate',
         platform: selectedPlatform,
         model,
         prompt: node.prompt,
-        image_size: resolvedImageSize,
+        parameters: resolvedImageSize ? { size: resolvedImageSize } : undefined,
         group_id: resolveGroupID(),
       });
       setCanvasTasks(prev => [task, ...prev.filter(item => item.id !== task.id)]);
       const msgs = await api.listMessages(activeId);
       if (activeIdRef.current === activeId) setMessages(msgs);
-      await pollImageTask(task.id, activeId);
+      await pollGenerationTask(task.id, activeId);
       api.getUserInfo().then(setUserInfo).catch(() => {});
     } catch (e) {
       if (activeIdRef.current === activeId) {
@@ -1463,7 +1393,7 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
       setIsStreaming(false);
       setStreamConversationId(null);
     }
-  }, [activeId, isStreaming, resolveGroupID, resolvedImageSize, selectedModelID, selectedPlatform, pollImageTask, setMessages]);
+  }, [activeId, isStreaming, resolveGroupID, resolvedImageSize, selectedModelID, selectedPlatform, pollGenerationTask, setMessages]);
 
   // ── Image file callbacks ──────────────────────────────────────────────
 
@@ -1745,18 +1675,6 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
         setConversations(prev => [conv, ...prev.filter(c => c.id !== DRAFT_CONVERSATION_ID)]);
       }
 
-      const persistedUser = await api.persistMessage({
-        conversation_id: conversationID,
-        role: 'user',
-        content: userContent,
-        platform: selectedPlatform,
-        model: selectedModelID,
-        group_id: groupID,
-      });
-      if (activeIdRef.current === conversationID) {
-        setMessages(prev => prev.map(msg => (msg.id === localUserMessage.id ? persistedUser : msg)));
-      }
-
       const abort = new AbortController();
       abortRef.current = abort;
       const maskBlob = await createEditMaskBlob(confirmedImageEdit);
@@ -1766,33 +1684,28 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
       if (abort.signal.aborted) return;
 
       const editPrompt = `${prompt}\n\nEdit only the transparent area indicated by the mask. Keep everything outside the mask unchanged.`;
-      const form = new FormData();
-      form.append('model', selectedModelID);
-      form.append('prompt', editPrompt);
-      form.append('image', confirmedImageEdit.source.file, confirmedImageEdit.source.name || 'image.png');
-      form.append('mask', maskBlob, 'mask.png');
-      if (editSize) form.append('size', editSize);
-
-      const response = await requestImageEdit(selectedPlatform, form, abort.signal);
-      if (abort.signal.aborted) return;
-      const assistantContent = imageEditAssistantContent(response, 'edited-image');
-      if (!assistantContent) throw new Error('No image returned');
-      const usage = imageEditUsage(response);
-      const persistedAssistant = await api.persistMessage({
+      const sourceDataURL = await fileToDataURL(confirmedImageEdit.source.file);
+      const maskDataURL = await blobToDataURL(maskBlob);
+      const task = await api.createGenerationTask({
         conversation_id: conversationID,
-        role: 'assistant',
-        content: assistantContent,
+        kind: 'image',
+        operation: 'inpaint',
         platform: selectedPlatform,
-        model: response.model || selectedModelID,
+        model: selectedModelID,
+        prompt: editPrompt,
         group_id: groupID,
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
-        cost: usage.cost,
+        parameters: editSize ? { size: editSize } : undefined,
+        inputs: [{ type: 'image', role: 'source', url: sourceDataURL }],
+        mask: { type: 'image', role: 'mask', url: maskDataURL },
+        message_content: userContent,
       });
-
+      if (abort.signal.aborted) return;
+      const msgs = await api.listMessages(conversationID);
       if (activeIdRef.current === conversationID) {
-        setMessages(prev => [...prev, persistedAssistant]);
+        setMessages(msgs);
       }
+      await pollGenerationTask(task.id, conversationID);
+      api.getUserInfo().then(setUserInfo).catch(() => {});
       setConversations(prev => prev.map(c =>
         c.id === conversationID && !c.title
           ? { ...c, title: titleFromMessageContent(userContent), updated_at: new Date().toISOString() }
@@ -1818,7 +1731,7 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
       setStreamConversationId(null);
       streamContextRef.current = null;
     }
-  }, [activeId, confirmedImageEdit, createEditMaskBlob, input, isEditingImage, isStreaming, resolveGroupID, resolvedImageSize, selectedModelID, selectedModelIsImage, selectedPlatform, t]);
+  }, [activeId, confirmedImageEdit, createEditMaskBlob, input, isEditingImage, isStreaming, pollGenerationTask, resolveGroupID, resolvedImageSize, selectedModelID, selectedModelIsImage, selectedPlatform, t]);
 
   // ── Clipboard & image management callbacks ────────────────────────────
 
@@ -1998,18 +1911,51 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
     const shouldUseReasoning = supportsReasoning(requestModelInfo) || Boolean(lastUserMessage.reasoning_effort);
     setError('');
     setRetryRequest(null);
+    if (isImageRequest) {
+      setIsStreaming(true);
+      setStreamConversationId(activeId);
+      streamContextRef.current = { conversationId: activeId, model: requestModel };
+      void (async () => {
+        try {
+          const task = await api.createGenerationTask({
+            conversation_id: activeId,
+            kind: 'image',
+            operation: 'generate',
+            platform: requestPlatform,
+            model: requestModel,
+            prompt: stripImagePlannerNoise(lastUserMessage.content) || '根据上一条消息生成图像。',
+            group_id: lastUserMessage.group_id || activeConv?.group_id || resolveGroupID(),
+            parameters: resolvedImageSize ? { size: resolvedImageSize } : undefined,
+            client_context: { persist_user_message: false },
+          });
+          await pollGenerationTask(task.id, activeId);
+          api.getUserInfo().then(setUserInfo).catch(() => {});
+        } catch (e) {
+          if (activeIdRef.current === activeId) {
+            setError(e instanceof Error ? e.message : 'generation failed');
+          }
+        } finally {
+          if (activeIdRef.current === activeId) {
+            setIsStreaming(false);
+            setStreamContent('');
+            setStreamReasoning('');
+            setStreamConversationId(null);
+            streamContextRef.current = null;
+          }
+        }
+      })();
+      return;
+    }
     void streamAssistantResponse({
       conversationID: activeId,
       requestMessages: messages.map(msg => ({ ...msg })),
       model: requestModel,
       groupID: lastUserMessage.group_id || activeConv?.group_id || resolveGroupID(),
       platform: requestPlatform,
-      isImageRequest,
-      imageSize: isImageRequest ? resolvedImageSize : undefined,
       supportsReasoning: shouldUseReasoning,
       reasoningEffort: lastUserMessage.reasoning_effort || reasoningEffort,
     });
-  }, [activeConv, activeId, isStreaming, messages, models, reasoningEffort, resolveGroupID, resolvedImageSize, selectedModelID, selectedPlatform, streamAssistantResponse]);
+  }, [activeConv, activeId, isStreaming, messages, models, pollGenerationTask, reasoningEffort, resolveGroupID, resolvedImageSize, selectedModelID, selectedPlatform, streamAssistantResponse]);
 
   const handleImagePreview = useCallback((url: string, alt: string, imageIndex = 0) => {
     setPreviewImage({ images: [{ url, alt }], index: imageIndex });
@@ -2043,8 +1989,7 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
       return;
     }
     const images = generatedImages(assistantMessage.content);
-    const targetImage = images[imageIndex];
-    if (!targetImage) {
+    if (!images[imageIndex]) {
       setError(t('playground.no_image_prompt'));
       return;
     }
@@ -2056,7 +2001,6 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
       return;
     }
 
-    const requestModelInfo = models.find(item => item.id === requestModel && item.platform === requestPlatform) || models.find(item => item.id === requestModel);
     const retryPrompt = [
       `Regenerate only image ${imageIndex + 1} of ${images.length}.`,
       'Generate exactly one standalone replacement image for this slot.',
@@ -2064,8 +2008,6 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
       'Original request:',
       stripImagePlannerNoise(sourceMessage.content),
     ].filter(Boolean).join('\n\n');
-    const prompt = contentWithImageShotPrompt(sourceMessage.content, retryPrompt);
-    const requestMessages = messages.slice(0, sourceIndex + 1).map((msg, index) => index === sourceIndex ? { ...msg, content: prompt } : { ...msg });
 
     setError('');
     setRetryRequest(null);
@@ -2079,77 +2021,46 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
 
     const abort = new AbortController();
     abortRef.current = abort;
-    let accumulated = '';
-    let accumulatedReasoning = '';
 
-    void chatCompletionsStream(
-      requestPlatform,
-      {
-        model: requestModel,
-        messages: requestMessages.map(msg => ({
-          role: msg.role,
-          content: toChatMessageContent(msg.role, replaceBlobUrlsWithBase64(msg.content, blobUrlRegistryRef.current)),
-        })),
-        stream: true,
-        n: 1,
-        ...(resolvedImageSize ? { size: resolvedImageSize } : {}),
-        ...(supportsReasoning(requestModelInfo) ? { reasoning_effort: reasoningEffort } : {}),
-      },
-      {
-        onData: (text) => {
-          accumulated += replaceBase64WithBlobUrls(text, blobUrlRegistryRef.current);
-        },
-        onReasoning: (text) => {
-          accumulatedReasoning += text;
-          setStreamReasoning(accumulatedReasoning);
-        },
-        onDone: async (usage) => {
-          if (!accumulated || abort.signal.aborted) return;
-          const nextImages = generatedImages(accumulated);
-          const replacement = nextImages[0];
-          if (!replacement) {
-            setError(t('playground.no_response'));
-            return;
-          }
-
-          const replacementMarkdown = `![${escapeMarkdownAlt(replacement.alt || targetImage.alt || t('playground.generated_image'))}](${replacement.url})`;
-          const retryLabel = t('playground.regenerated_image_label', { defaultValue: 'Regenerated image for image {{index}}', index: imageIndex + 1 });
-          const nextContent = `${retryLabel}\n\n${replacementMarkdown}`;
-          const persisted = await api.persistMessage({
-            conversation_id: activeId,
-            role: 'assistant',
-            content: replaceBlobUrlsWithBase64(nextContent, blobUrlRegistryRef.current),
-            reasoning: accumulatedReasoning,
-            platform: requestPlatform,
-            model: usage.model || requestModel,
-            group_id: assistantMessage.group_id,
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cost: usage.cost,
-          });
-          if (activeIdRef.current === activeId) {
-            setMessagesRaw(prev => [...prev, { ...persisted, content: nextContent }]);
-            setInteractionNotice(t('playground.image_regenerated', { defaultValue: 'Image regenerated' }));
-          }
-        },
-        onError: (err) => {
-          if (activeIdRef.current === activeId) setError(err);
-        },
-      },
-      abort.signal,
-    ).catch(err => {
-      if (activeIdRef.current === activeId && err instanceof Error) setError(err.message);
-    }).finally(() => {
-      if (activeIdRef.current === activeId) {
-        setStreamContent('');
-        setStreamReasoning('');
-        setStreamConversationId(null);
-        streamContextRef.current = null;
-        setRegeneratingImage(null);
-        setIsStreaming(false);
+    void (async () => {
+      try {
+        const task = await api.createGenerationTask({
+          conversation_id: activeId,
+          kind: 'image',
+          operation: 'generate',
+          platform: requestPlatform,
+          model: requestModel,
+          prompt: retryPrompt,
+          group_id: assistantMessage.group_id || sourceMessage.group_id || resolveGroupID(),
+          parameters: resolvedImageSize ? { size: resolvedImageSize } : undefined,
+          client_context: { persist_user_message: false },
+        });
+        if (abort.signal.aborted) return;
+        const msgs = await api.listMessages(activeId);
+        if (activeIdRef.current === activeId) {
+          setMessages(msgs);
+        }
+        await pollGenerationTask(task.id, activeId);
+        if (activeIdRef.current === activeId) {
+          setInteractionNotice(t('playground.image_regenerated', { defaultValue: 'Image regenerated' }));
+          api.getUserInfo().then(setUserInfo).catch(() => {});
+        }
+      } catch (err) {
+        if (activeIdRef.current === activeId && err instanceof Error) {
+          setError(err.message);
+        }
+      } finally {
+        if (activeIdRef.current === activeId) {
+          setStreamContent('');
+          setStreamReasoning('');
+          setStreamConversationId(null);
+          streamContextRef.current = null;
+          setRegeneratingImage(null);
+          setIsStreaming(false);
+        }
       }
-    });
-  }, [activeId, isStreaming, messages, models, reasoningEffort, resolvedImageSize, selectedPlatform, selectedModelID, t]);
+    })();
+  }, [activeId, isStreaming, messages, pollGenerationTask, resolveGroupID, resolvedImageSize, selectedPlatform, selectedModelID, t]);
 
   const handleMessageCopy = useCallback((content: string) => {
     void copyText(content)
@@ -2349,7 +2260,7 @@ export function PlaygroundProvider({ children, initialCanvasMode }: { children: 
     streamAssistantResponse,
     sendMessage,
     sendCanvasMessage,
-    pollImageTask,
+    pollGenerationTask,
     regenerateCanvasNode,
     addImageFiles,
     handleImageChange,

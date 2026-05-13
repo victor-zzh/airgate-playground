@@ -13,7 +13,6 @@ export const BASE64_DATA_URL_RE = /data:image\/(?:png|jpeg|jpg|webp|gif);base64,
 const MARKDOWN_IMAGE_URL_PATTERN = String.raw`data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+|\/api\/v1\/ext-user\/airgate-playground\/assets\/[^\s)]+|\/assets-runtime\/[^\s)]+|blob:[^\s)]+`;
 export const IMAGE_MARKDOWN_RE = new RegExp(String.raw`!\[[^\]]*\]\((${MARKDOWN_IMAGE_URL_PATTERN})\)`, 'g');
 export const IMAGE_MARKDOWN_ITEM_RE = new RegExp(String.raw`!\[([^\]]*)\]\((${MARKDOWN_IMAGE_URL_PATTERN})\)`, 'g');
-export const IMAGE_MARKDOWN_TEST_RE = new RegExp(String.raw`!\[[^\]]*\]\((${MARKDOWN_IMAGE_URL_PATTERN})\)`);
 export const IMAGE_EDIT_ANNOTATION_RE = /<!--airgate:image-edit:([A-Za-z0-9+/=]+)-->/g;
 export const DATA_IMAGE_RE = /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i;
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -24,9 +23,6 @@ export const GPT_IMAGE_MAX_PIXELS = 8294400;
 export const DEFAULT_MODEL_ID = 'gpt-5.5';
 export const ACTIVE_CONVERSATION_STORAGE_KEY = 'airgate.playground.activeConversationId';
 export const SELECTED_MODEL_STORAGE_KEY = 'airgate.playground.selectedModel';
-export const IMAGE_PROMPT_PLANNER_PLATFORM = 'openai';
-export const IMAGE_PROMPT_PLANNER_MODEL = 'gpt-5.4-mini';
-export const MAX_IMAGE_SHOTS = 4;
 export const IMAGE_SIZE_AUTO = 'auto';
 export const IMAGE_SIZE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: IMAGE_SIZE_AUTO, label: 'Auto' },

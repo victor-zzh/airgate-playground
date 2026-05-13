@@ -1,7 +1,7 @@
-import type { ChatMessageContent, Conversation, ImageEditResponse, ImageTask, Message, ModelInfo, PlatformInfo, ReasoningEffort, UserInfo } from '../api';
+import type { ChatMessageContent, Conversation, GenerationTask, Message, ModelInfo, PlatformInfo, ReasoningEffort, UserInfo } from '../api';
 
 // Re-export API types for convenience
-export type { ChatMessageContent, Conversation, ImageEditResponse, ImageTask, Message, ModelInfo, PlatformInfo, ReasoningEffort, UserInfo };
+export type { ChatMessageContent, Conversation, GenerationTask, Message, ModelInfo, PlatformInfo, ReasoningEffort, UserInfo };
 
 export type ImageSizeSettings = {
   value: string;
@@ -31,8 +31,6 @@ export type StreamAssistantOptions = {
   model: string;
   groupID: number;
   platform: string;
-  isImageRequest?: boolean;
-  imageSize?: string;
   supportsReasoning?: boolean;
   reasoningEffort?: ReasoningEffort;
   titleContent?: string;

@@ -44,6 +44,7 @@ type hostForwardResponse struct {
 	Headers    http.Header
 	Body       []byte
 	Usage      *sdk.Usage
+	UsageID    int
 }
 
 type hostForwardChunk struct {
@@ -62,7 +63,11 @@ type hostUpdateTaskRequest struct {
 	TaskID       int64
 	Status       sdk.TaskStatus
 	Progress     int
+	Stage        string
 	Output       map[string]interface{}
+	Attributes   map[string]interface{}
+	Execution    map[string]interface{}
+	UsageID      int
 	ErrorMessage string
 }
 
@@ -104,6 +109,7 @@ func hostForward(ctx context.Context, host sdk.Host, req hostForwardRequest) (*h
 		Headers:    headerFromPayload(firstPayloadValue(payload, "headers")),
 		Body:       bytesFromPayload(firstPayloadValue(payload, "body")),
 		Usage:      usageFromPayload(firstPayloadValue(payload, "usage")),
+		UsageID:    intFromAny(firstPayloadValue(payload, "usage_id")),
 	}, nil
 }
 
@@ -155,12 +161,16 @@ func hostForwardPayload(req hostForwardRequest) map[string]interface{} {
 	}
 }
 
-func hostCreateTask(ctx context.Context, host sdk.Host, taskType string, userID int64, input map[string]interface{}) (*sdk.HostTask, error) {
-	payload, err := hostInvoke(ctx, host, hostMethodTasksCreate, map[string]interface{}{
+func hostCreateTask(ctx context.Context, host sdk.Host, taskType string, userID int64, input, attributes map[string]interface{}) (*sdk.HostTask, error) {
+	req := map[string]interface{}{
 		"task_type": taskType,
 		"user_id":   userID,
 		"input":     input,
-	})
+	}
+	if attributes != nil {
+		req["attributes"] = attributes
+	}
+	payload, err := hostInvoke(ctx, host, hostMethodTasksCreate, req)
 	if err != nil {
 		return nil, err
 	}
@@ -177,8 +187,20 @@ func hostUpdateTask(ctx context.Context, host sdk.Host, req hostUpdateTaskReques
 	if req.Progress > 0 {
 		payload["progress"] = req.Progress
 	}
+	if req.Stage != "" {
+		payload["stage"] = req.Stage
+	}
 	if req.Output != nil {
 		payload["output"] = req.Output
+	}
+	if req.Attributes != nil {
+		payload["attributes"] = req.Attributes
+	}
+	if req.Execution != nil {
+		payload["execution"] = req.Execution
+	}
+	if req.UsageID > 0 {
+		payload["usage_id"] = req.UsageID
 	}
 	if req.ErrorMessage != "" {
 		payload["error_message"] = req.ErrorMessage
@@ -187,8 +209,8 @@ func hostUpdateTask(ctx context.Context, host sdk.Host, req hostUpdateTaskReques
 	return err
 }
 
-func hostGetTask(ctx context.Context, host sdk.Host, taskID int64) (*sdk.HostTask, error) {
-	payload, err := hostInvoke(ctx, host, hostMethodTasksGet, map[string]interface{}{"task_id": taskID})
+func hostGetTask(ctx context.Context, host sdk.Host, userID, taskID int64) (*sdk.HostTask, error) {
+	payload, err := hostInvoke(ctx, host, hostMethodTasksGet, map[string]interface{}{"task_id": taskID, "user_id": userID})
 	if err != nil {
 		return nil, err
 	}

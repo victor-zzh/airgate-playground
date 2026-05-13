@@ -152,22 +152,45 @@ export interface UserInfo {
   api_key_platform?: string;
 }
 
-export interface ImageTask {
-  id: number;
-  user_id: number;
-  conversation_id: number;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+export interface GenerationInputAsset {
+  type: string;
+  role?: string;
+  url: string;
+}
+
+export interface CreateGenerationTaskRequest {
+  conversation_id?: number;
+  kind: string;
+  operation: string;
   platform: string;
   model: string;
   prompt: string;
-  image_size?: string;
   group_id?: number;
-  mode?: string;
+  parameters?: Record<string, unknown>;
+  inputs?: GenerationInputAsset[];
+  mask?: GenerationInputAsset;
+  message_content?: string;
+  client_context?: Record<string, unknown>;
+}
+
+export interface GenerationTask {
+  id: number;
+  task_id?: number;
+  user_id: number;
+  conversation_id?: number;
+  kind: string;
+  operation: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  stage?: string;
+  progress?: number;
+  platform: string;
+  model: string;
+  prompt: string;
+  group_id?: number;
+  parameters?: Record<string, unknown>;
   result_content?: string;
   error_message?: string;
-  input_tokens?: number;
-  output_tokens?: number;
-  cost?: number;
+  usage_id?: number;
   created_at: string;
   updated_at: string;
   completed_at?: string;
@@ -214,45 +237,11 @@ export type ChatMessageContent = string | Array<
   | { type: 'image_url'; image_url: { url: string } }
 >;
 
-export interface ChatCompletionResponse {
-  id?: string;
-  model?: string;
-  choices?: Array<{
-    message?: {
-      content?: string;
-    };
-  }>;
-  usage?: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    input_tokens?: number;
-    output_tokens?: number;
-    cost?: number;
-  };
-}
-
 export interface ChatCompletionCallbacks {
   onData: (text: string) => void;
   onReasoning: (text: string) => void;
   onDone: (usage: { input_tokens: number; output_tokens: number; model: string; cost: number }) => void | Promise<void>;
   onError: (err: string) => void;
-}
-
-export interface ImageEditResponse {
-  created?: number;
-  model?: string;
-  data?: Array<{
-    url?: string;
-    b64_json?: string;
-    revised_prompt?: string;
-  }>;
-  usage?: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    input_tokens?: number;
-    output_tokens?: number;
-    cost?: number;
-  };
 }
 
 // ── API ──
@@ -312,92 +301,14 @@ export const api = {
 
   getUserInfo: () => coreRequest<UserInfo>('GET', '/users/me'),
 
-  createImageTask: (data: { conversation_id?: number; platform: string; model: string; prompt: string; image_size?: string; group_id?: number; mode?: string; source_image?: string; mask?: string }) =>
-    request<ImageTask>('POST', '/image-tasks', data),
+  createGenerationTask: (data: CreateGenerationTaskRequest) =>
+    request<GenerationTask>('POST', '/generation-tasks', data),
 
-  getImageTask: (id: number) => request<ImageTask>('GET', `/image-tasks/${id}`),
+  getGenerationTask: (id: number) => request<GenerationTask>('GET', `/generation-tasks/${id}`),
 
-  listImageTasks: (conversationId?: number) =>
-    request<ImageTask[]>('GET', conversationId ? `/image-tasks?conversation_id=${conversationId}` : '/image-tasks'),
+  listGenerationTasks: (conversationId?: number) =>
+    request<GenerationTask[]>('GET', conversationId ? `/generation-tasks?conversation_id=${conversationId}` : '/generation-tasks'),
 };
-
-export async function chatCompletion(
-  platform: string,
-  body: {
-    model: string;
-    messages: Array<{ role: string; content: ChatMessageContent }>;
-    stream?: false;
-    response_format?: { type: 'json_object' };
-    // size 透传给 OpenAI 网关的 chat→images 兼容路径
-    // (airgate buildChatCompatImagePayload 直接 gjson 读这个字段)。
-    // OpenAI 原生 Chat Completions 不识别此字段；非 image 模型上游会忽略。
-    size?: string;
-  },
-  signal?: AbortSignal,
-): Promise<ChatCompletionResponse> {
-  const resp = await fetch(`${BASE}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      ...authHeaders(),
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'X-Airgate-Platform': platform,
-    },
-    body: JSON.stringify({ ...body, stream: false }),
-    signal,
-  });
-
-  const text = await resp.text();
-  let parsed: unknown = null;
-  try {
-    parsed = text ? JSON.parse(text) : null;
-  } catch { /* ignore */ }
-
-  if (!resp.ok) {
-    if (resp.status === 401) {
-      clearStoredTokenAndRedirect();
-    }
-    const errorPayload = parsed as { error?: { message?: string } | string; message?: string } | null;
-    const message = typeof errorPayload?.error === 'string'
-      ? errorPayload.error
-      : errorPayload?.error?.message || errorPayload?.message || `HTTP ${resp.status}`;
-    throw new Error(message);
-  }
-
-  return (parsed || {}) as ChatCompletionResponse;
-}
-
-export async function editImage(platform: string, form: FormData, signal?: AbortSignal): Promise<ImageEditResponse> {
-  const resp = await fetch(`${BASE}/images/edits`, {
-    method: 'POST',
-    headers: {
-      ...authHeaders(),
-      'Accept': 'application/json',
-      'X-Airgate-Platform': platform,
-    },
-    body: form,
-    signal,
-  });
-
-  const text = await resp.text();
-  let parsed: unknown = null;
-  try {
-    parsed = text ? JSON.parse(text) : null;
-  } catch { /* ignore */ }
-
-  if (!resp.ok) {
-    if (resp.status === 401) {
-      clearStoredTokenAndRedirect();
-    }
-    const errorPayload = parsed as { error?: { message?: string } | string; message?: string } | null;
-    const message = typeof errorPayload?.error === 'string'
-      ? errorPayload.error
-      : errorPayload?.error?.message || errorPayload?.message || `HTTP ${resp.status}`;
-    throw new Error(message);
-  }
-
-  return (parsed || {}) as ImageEditResponse;
-}
 
 export async function chatCompletionsStream(
   platform: string,
@@ -406,8 +317,6 @@ export async function chatCompletionsStream(
     messages: Array<{ role: string; content: ChatMessageContent }>;
     stream: true;
     reasoning_effort?: ReasoningEffort;
-    size?: string;
-    n?: number;
     stream_options?: { include_usage?: boolean };
   },
   callbacks: ChatCompletionCallbacks,

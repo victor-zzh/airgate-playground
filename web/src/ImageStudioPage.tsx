@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cssVar } from '@doudou-start/airgate-theme';
-import { api, chatCompletion, editImage as requestImageEdit } from './api';
-import type { ChatCompletionResponse, ImageEditResponse, ModelInfo, PlatformInfo, UserInfo } from './api';
+import { api } from './api';
+import type { GenerationTask, ModelInfo, PlatformInfo, UserInfo } from './api';
 
 // 选项遵循 codex imagegen SKILL 推荐。`auto` 是默认值，请求时不发 size 字段，
 // 让上游 image_generation 工具自己挑（gpt-image-2 通常会落到 1024×1024）。
@@ -126,6 +126,23 @@ function probeImageDimensions(url: string): Promise<string> {
 function generateLocalId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function waitForGenerationTask(taskID: number, signal: AbortSignal): Promise<GenerationTask> {
+  for (let i = 0; i < 120; i += 1) {
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+    const task = await api.getGenerationTask(taskID);
+    if (task.status === 'completed') return task;
+    if (task.status === 'failed') throw new Error(task.error_message || '生成失败');
+    await new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(resolve, 2000);
+      signal.addEventListener('abort', () => {
+        window.clearTimeout(timer);
+        reject(new DOMException('Aborted', 'AbortError'));
+      }, { once: true });
+    });
+  }
+  throw new Error('生成超时');
 }
 
 function readLocalStorageValue(key: string) {
@@ -274,38 +291,20 @@ export default function ImageStudioPage({ onExit, userInfo, onUserInfoChange }: 
     refs: Reference[],
     signal: AbortSignal,
   ): Promise<{ url: string } | null> => {
-    if (refs.length > 0) {
-      const form = new FormData();
-      form.append('model', activeModel);
-      form.append('prompt', promptText);
-      // size === 'auto' 时不发字段，让上游 image_generation 工具按默认（gpt-image-2 → 1024×1024）处理；
-      // 后端 validateImageSize 对空/auto 直接放行。
-      if (activeSize && activeSize !== SIZE_AUTO) {
-        form.append('size', activeSize);
-      }
-      refs.forEach((ref, idx) => {
-        form.append(refs.length === 1 ? 'image' : `image[${idx}]`, ref.file, ref.name);
-      });
-      const resp: ImageEditResponse = await requestImageEdit(activePlatform, form, signal);
-      const item = resp.data?.[0];
-      if (!item) return null;
-      const url = item.url || (item.b64_json ? `data:image/png;base64,${item.b64_json}` : '');
-      return url ? { url } : null;
-    }
-    // generation 模式（无参考图）走 chat completions 兼容路径——必须把 size
-    // 显式塞进 body，后端 buildChatCompatImagePayload 才会透传给 image_generation
-    // 工具；否则永远是上游默认 1024×1024，前端 size 选择形同虚设。
-    const resp: ChatCompletionResponse = await chatCompletion(
-      activePlatform,
-      {
-        model: activeModel,
-        messages: [{ role: 'user', content: promptText }],
-        stream: false,
-        ...(activeSize && activeSize !== SIZE_AUTO ? { size: activeSize } : null),
-      },
-      signal,
-    );
-    const found = extractFirstImageUrl(resp.choices?.[0]?.message?.content);
+    const inputs = refs.length > 0
+      ? await Promise.all(refs.map(async ref => ({ type: 'image' as const, role: 'source', url: await fileToDataURL(ref.file) })))
+      : undefined;
+    const task = await api.createGenerationTask({
+      kind: 'image',
+      operation: refs.length > 0 ? 'edit' : 'generate',
+      platform: activePlatform,
+      model: activeModel,
+      prompt: promptText,
+      parameters: activeSize && activeSize !== SIZE_AUTO ? { size: activeSize } : undefined,
+      inputs,
+    });
+    const completed = await waitForGenerationTask(task.id, signal);
+    const found = extractFirstImageUrl(completed.result_content);
     return found ? { url: found.url } : null;
   }, []);
 

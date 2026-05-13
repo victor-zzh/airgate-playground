@@ -14,7 +14,7 @@ export interface GalleryItem {
   sourceUrl?: string; // for img2img/inpaint, the reference image
 }
 
-export interface GenerationTask {
+export interface StudioGenerationTask {
   id: string;
   prompt: string;
   mode: ImageMode;
