@@ -152,6 +152,27 @@ export interface UserInfo {
   api_key_platform?: string;
 }
 
+export interface ImageTask {
+  id: number;
+  user_id: number;
+  conversation_id: number;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  platform: string;
+  model: string;
+  prompt: string;
+  image_size?: string;
+  group_id?: number;
+  mode?: string;
+  result_content?: string;
+  error_message?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cost?: number;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+}
+
 export interface PersistedMessageRequest {
   conversation_id: number;
   role: string;
@@ -268,8 +289,10 @@ export const api = {
       .filter(item => item.name);
   },
 
-  listModels: async (platform: string) => {
-    const payload = await request<ProviderModelListResponse | ProviderModelInfo[]>('GET', `/models?platform=${encodeURIComponent(platform)}`);
+  listModels: async (platform: string, capability?: string) => {
+    let url = `/models?platform=${encodeURIComponent(platform)}`;
+    if (capability) url += `&capability=${encodeURIComponent(capability)}`;
+    const payload = await request<ProviderModelListResponse | ProviderModelInfo[]>('GET', url);
     const data = Array.isArray(payload) ? payload : payload.data || [];
     return data.map(item => {
       const id = item.id || item.ID || '';
@@ -288,6 +311,14 @@ export const api = {
   },
 
   getUserInfo: () => coreRequest<UserInfo>('GET', '/users/me'),
+
+  createImageTask: (data: { conversation_id?: number; platform: string; model: string; prompt: string; image_size?: string; group_id?: number; mode?: string; source_image?: string; mask?: string }) =>
+    request<ImageTask>('POST', '/image-tasks', data),
+
+  getImageTask: (id: number) => request<ImageTask>('GET', `/image-tasks/${id}`),
+
+  listImageTasks: (conversationId?: number) =>
+    request<ImageTask[]>('GET', conversationId ? `/image-tasks?conversation_id=${conversationId}` : '/image-tasks'),
 };
 
 export async function chatCompletion(

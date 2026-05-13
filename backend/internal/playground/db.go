@@ -44,6 +44,27 @@ type Asset struct {
 	CreatedAt      time.Time
 }
 
+type ImageTask struct {
+	ID             int64      `json:"id"`
+	UserID         int        `json:"user_id"`
+	ConversationID int64      `json:"conversation_id"`
+	Status         string     `json:"status"` // pending, processing, completed, failed
+	Platform       string     `json:"platform"`
+	Model          string     `json:"model"`
+	Prompt         string     `json:"prompt"`
+	ImageSize      string     `json:"image_size,omitempty"`
+	GroupID        int64      `json:"group_id,omitempty"`
+	Mode           string     `json:"mode,omitempty"`
+	ResultContent  string     `json:"result_content,omitempty"`
+	ErrorMessage   string     `json:"error_message,omitempty"`
+	InputTokens    int        `json:"input_tokens,omitempty"`
+	OutputTokens   int        `json:"output_tokens,omitempty"`
+	Cost           float64    `json:"cost,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+}
+
 func migrate(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS playground_conversations (
@@ -92,6 +113,29 @@ func migrate(db *sql.DB) error {
 
 		CREATE INDEX IF NOT EXISTS idx_playground_assets_user ON playground_assets(user_id, created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_playground_assets_conv ON playground_assets(conversation_id, created_at DESC);
+
+		CREATE TABLE IF NOT EXISTS playground_image_tasks (
+			id              BIGSERIAL PRIMARY KEY,
+			user_id         INTEGER NOT NULL,
+			conversation_id BIGINT NOT NULL DEFAULT 0,
+			status          TEXT NOT NULL DEFAULT 'pending',
+			platform        TEXT NOT NULL DEFAULT '',
+			model           TEXT NOT NULL DEFAULT '',
+			prompt          TEXT NOT NULL DEFAULT '',
+			image_size      TEXT NOT NULL DEFAULT '',
+			group_id        BIGINT NOT NULL DEFAULT 0,
+			result_content  TEXT NOT NULL DEFAULT '',
+			error_message   TEXT NOT NULL DEFAULT '',
+			input_tokens    INTEGER NOT NULL DEFAULT 0,
+			output_tokens   INTEGER NOT NULL DEFAULT 0,
+			cost            DOUBLE PRECISION NOT NULL DEFAULT 0,
+			created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			completed_at    TIMESTAMPTZ
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_playground_image_tasks_user ON playground_image_tasks(user_id, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_playground_image_tasks_status ON playground_image_tasks(status, created_at);
 	`)
 	return err
 }

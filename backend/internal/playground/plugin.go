@@ -3,9 +3,10 @@ package playground
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 
-	sdk "github.com/DouDOU-start/airgate-sdk"
+	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 )
 
 type Plugin struct {
@@ -71,9 +72,68 @@ func (p *Plugin) Init(ctx sdk.PluginContext) error {
 	return nil
 }
 
-func (p *Plugin) Start(_ context.Context) error {
+func (p *Plugin) Start(ctx context.Context) error {
 	p.logger.Info("AI Playground plugin started")
+	if p.svc != nil && p.host != nil {
+		go p.reconcileCompletedTasks(ctx)
+	}
 	return nil
+}
+
+// reconcileCompletedTasks checks Core for completed image tasks whose results
+// may not have been persisted to conversation messages (e.g. service restarted
+// mid-processing). It runs once on startup.
+func (p *Plugin) reconcileCompletedTasks(ctx context.Context) {
+	result, err := hostListTasks(ctx, p.host, 0, "image_generation", 100)
+	if err != nil {
+		p.logger.Warn("reconcile: failed to list completed tasks", "error", err)
+		return
+	}
+
+	recovered := 0
+	for _, task := range result.Tasks {
+		if task.Status != sdk.TaskStatusCompleted {
+			continue
+		}
+		content := stringFromMap(task.Output, "content")
+		if content == "" {
+			continue
+		}
+		convID := int64FromMap(task.Input, "conversation_id")
+		if convID <= 0 {
+			continue
+		}
+
+		exists, err := p.svc.hasMessageContent(ctx, convID, "assistant", content)
+		if err != nil {
+			p.logger.Warn("reconcile: check message failed", "task_id", task.ID, "error", err)
+			continue
+		}
+		if exists {
+			continue
+		}
+
+		platform := stringFromMap(task.Input, "platform")
+		model := stringFromMap(task.Output, "model")
+		if model == "" {
+			model = stringFromMap(task.Input, "model")
+		}
+		groupID := int64FromMap(task.Input, "group_id")
+		inputTokens := intFromMap(task.Output, "input_tokens")
+		outputTokens := intFromMap(task.Output, "output_tokens")
+		cost := float64FromMap(task.Output, "cost")
+
+		if _, err := p.svc.saveMessage(ctx, convID, "assistant", content, "", "", platform, model, groupID, inputTokens, outputTokens, cost); err != nil {
+			p.logger.Warn("reconcile: save message failed", "task_id", task.ID, "error", err)
+			continue
+		}
+		recovered++
+		p.logger.Info("reconcile: recovered task result", "task_id", task.ID, "conversation_id", convID)
+	}
+
+	if recovered > 0 {
+		p.logger.Info("reconcile: completed", "recovered_count", recovered)
+	}
 }
 
 func (p *Plugin) Stop(_ context.Context) error {
@@ -92,6 +152,19 @@ func (p *Plugin) Migrate() error {
 
 func (p *Plugin) BackgroundTasks() []sdk.BackgroundTask {
 	return nil
+}
+
+// TaskProcessor implementation — Core dispatches tasks here.
+
+func (p *Plugin) TaskTypes() []string {
+	return []string{"image_generation"}
+}
+
+func (p *Plugin) ProcessTask(ctx context.Context, task sdk.HostTask) error {
+	if p.svc == nil || p.host == nil {
+		return fmt.Errorf("plugin not configured")
+	}
+	return p.svc.ProcessCoreTask(ctx, p.host, p.logger, task)
 }
 
 func (p *Plugin) Configured() bool {

@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	sdk "github.com/DouDOU-start/airgate-sdk"
+	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 )
 
 const assetURIHost = "asset"
@@ -88,18 +88,12 @@ func (s *ObjectStorage) StoreImageBytes(ctx context.Context, userID int, convers
 	if conversationID > 0 {
 		scope = fmt.Sprintf("playground/conversation-%d", conversationID)
 	}
-	asset, err := s.host.StoreAsset(ctx, sdk.HostStoreAssetRequest{
-		UserID:        int64(userID),
-		Scope:         scope,
-		ContentType:   contentType,
-		Data:          data,
-		FileExtension: extensionForContentType(contentType),
-	})
+	asset, err := hostStoreAsset(ctx, s.host, int64(userID), scope, contentType, extensionForContentType(contentType), data)
 	if err != nil {
 		return nil, err
 	}
 	return &StoredAsset{
-		ID:          asset.AssetID,
+		ID:          asset.ID,
 		ObjectKey:   filepath.ToSlash(asset.ObjectKey),
 		PublicURL:   asset.PublicURL,
 		ContentType: asset.ContentType,
@@ -108,9 +102,9 @@ func (s *ObjectStorage) StoreImageBytes(ctx context.Context, userID int, convers
 }
 
 func (s *ObjectStorage) PublicURL(ctx context.Context, objectKey string) (string, error) {
-	return s.host.GetAssetURL(ctx, objectKey)
+	return hostGetAssetURL(ctx, s.host, objectKey)
 }
 
-func (s *ObjectStorage) GetBytes(ctx context.Context, objectKey string) (*sdk.HostAssetBytes, error) {
-	return s.host.GetAssetBytes(ctx, objectKey)
+func (s *ObjectStorage) GetBytes(ctx context.Context, objectKey string) (*hostAssetBytes, error) {
+	return hostGetAssetBytes(ctx, s.host, objectKey)
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
-import { cssVar } from '@airgate/theme';
+import { cssVar } from '@doudou-start/airgate-theme';
 import { api, chatCompletion, editImage as requestImageEdit } from './api';
 import type { ChatCompletionResponse, ImageEditResponse, ModelInfo, PlatformInfo, UserInfo } from './api';
 
@@ -24,11 +24,8 @@ const SIZE_OPTIONS: Array<{ value: string; label: string }> = [
 const COUNT_OPTIONS = [1, 2, 3, 4];
 const MAX_REFERENCE_BYTES = 10 * 1024 * 1024;
 const IMAGE_MARKDOWN_RE = /!\[([^\]]*)\]\((data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+)\)/g;
-const IMAGE_MODEL_RE = /(^|[-_])(?:gpt[-_]?image|image)(?:[-_.]|\d|$)/i;
 const STORAGE_PLATFORM = 'airgate.studio.platform';
 const STORAGE_MODEL = 'airgate.studio.model';
-// Platforms that don't expose any image generation/edit models — hide them in the studio.
-const NON_IMAGE_PLATFORMS = new Set(['claude']);
 
 type GalleryItem = {
   id: string;
@@ -52,10 +49,6 @@ interface ImageStudioPageProps {
   onExit?: () => void;
   userInfo: UserInfo | null;
   onUserInfoChange?: (info: UserInfo) => void;
-}
-
-function isImageOnly(model: ModelInfo) {
-  return Boolean(model.image_only) || IMAGE_MODEL_RE.test(model.id) || IMAGE_MODEL_RE.test(model.name || '');
 }
 
 function fileToDataURL(file: File) {
@@ -181,10 +174,9 @@ export default function ImageStudioPage({ onExit, userInfo, onUserInfoChange }: 
     let cancelled = false;
     api.listPlatforms().then(list => {
       if (cancelled) return;
-      const filtered = list.filter(p => !NON_IMAGE_PLATFORMS.has(p.name));
-      setPlatforms(filtered);
-      if (filtered.length && !filtered.some(p => p.name === platform)) {
-        setPlatform(filtered[0].name);
+      setPlatforms(list);
+      if (list.length && !list.some(p => p.name === platform)) {
+        setPlatform(list[0].name);
       }
     }).catch(() => { /* ignore */ });
     return () => { cancelled = true; };
@@ -195,13 +187,12 @@ export default function ImageStudioPage({ onExit, userInfo, onUserInfoChange }: 
   useEffect(() => {
     if (!platform) { setModels([]); return; }
     let cancelled = false;
-    api.listModels(platform).then(list => {
+    api.listModels(platform, 'image_generation').then(list => {
       if (cancelled) return;
-      const imageModels = list.filter(isImageOnly);
-      setModels(imageModels);
-      if (imageModels.length && !imageModels.some(m => m.id === modelID)) {
-        setModelID(imageModels[0].id);
-      } else if (!imageModels.length) {
+      setModels(list);
+      if (list.length && !list.some(m => m.id === modelID)) {
+        setModelID(list[0].id);
+      } else if (!list.length) {
         setModelID('');
       }
     }).catch(() => { /* ignore */ });

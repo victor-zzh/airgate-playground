@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	sdk "github.com/DouDOU-start/airgate-sdk"
+	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -38,6 +38,11 @@ func (p *Plugin) RegisterRoutes(r sdk.RouteRegistrar) {
 	r.Handle(http.MethodPost, "/messages", p.requireUser(p.handlePersistMessage))
 	r.Handle(http.MethodPost, "/chat/completions", p.requireUser(p.handleChatCompletions))
 	r.Handle(http.MethodPost, "/images/edits", p.requireUser(p.handleImageEdits))
+
+	// Image tasks (async generation)
+	r.Handle(http.MethodPost, "/image-tasks", p.requireUser(p.handleCreateImageTask))
+	r.Handle(http.MethodGet, "/image-tasks", p.requireUser(p.handleListImageTasks))
+	r.Handle(http.MethodGet, "/image-tasks/", p.requireUser(p.handleGetImageTask))
 
 	// Metadata (platforms, models, user info)
 	r.Handle(http.MethodGet, "/platforms", p.requireUser(p.handleListPlatforms))
@@ -265,7 +270,7 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	)
 	if !stream {
 		headers.Set("Accept", "application/json")
-		resp, err := p.host.Forward(ctx, sdk.HostForwardRequest{
+		resp, err := hostForward(ctx, p.host, hostForwardRequest{
 			UserID:  int64(parseUserID(r)),
 			GroupID: 0,
 			Model:   fields.Model,
@@ -313,7 +318,7 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	headers.Set("Accept", "text/event-stream")
 
 	committed := false
-	err = p.host.ForwardStream(ctx, sdk.HostForwardRequest{
+	err = hostForwardStream(ctx, p.host, hostForwardRequest{
 		UserID:  int64(parseUserID(r)),
 		GroupID: 0,
 		Model:   fields.Model,
@@ -322,7 +327,7 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Headers: headers,
 		Body:    body,
 		Stream:  true,
-	}, func(chunk sdk.HostForwardChunk) error {
+	}, func(chunk hostForwardChunk) error {
 		if chunk.Done {
 			return nil
 		}
@@ -406,13 +411,14 @@ func (p *Plugin) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	headers.Set("Content-Type", contentType)
 	headers.Set("Accept", "application/json")
 	headers.Set("X-Airgate-Platform", platform)
+	headers.Set("X-Airgate-Task-Execution", "true")
 
 	logger.Debug("upstream_request_start",
 		sdk.LogFieldPlatform, platform,
 		sdk.LogFieldModel, model,
 		sdk.LogFieldPath, "/v1/images/edits",
 	)
-	resp, err := p.host.Forward(ctx, sdk.HostForwardRequest{
+	resp, err := hostForward(ctx, p.host, hostForwardRequest{
 		UserID:  int64(parseUserID(r)),
 		GroupID: 0,
 		Model:   model,
@@ -458,10 +464,157 @@ func (p *Plugin) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(respBody)
 }
 
+// ── Image Task Handlers ──
+
+func (p *Plugin) handleCreateImageTask(w http.ResponseWriter, r *http.Request) {
+	var req CreateImageTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	userID := parseUserID(r)
+
+	if req.Platform == "" || req.Model == "" || strings.TrimSpace(req.Prompt) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "platform, model, and prompt are required"})
+		return
+	}
+	groupID := req.GroupID
+	if req.ConversationID > 0 && groupID <= 0 {
+		conv, err := p.svc.GetConversation(r.Context(), userID, req.ConversationID)
+		if err != nil || conv == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "conversation not found"})
+			return
+		}
+		groupID = conv.GroupID
+	}
+
+	coreTask, err := hostCreateTask(r.Context(), p.host, "image_generation", int64(userID), map[string]interface{}{
+		"conversation_id": req.ConversationID,
+		"platform":        req.Platform,
+		"model":           req.Model,
+		"prompt":          req.Prompt,
+		"image_size":      req.ImageSize,
+		"group_id":        groupID,
+		"mode":            req.Mode,
+		"source_image":    req.SourceImage,
+		"mask":            req.Mask,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, coreTaskToImageTask(coreTask))
+}
+
+func (p *Plugin) handleGetImageTask(w http.ResponseWriter, r *http.Request) {
+	taskID := parsePathID(r.URL.Path, "/image-tasks/")
+	if taskID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid task id"})
+		return
+	}
+	coreTask, err := hostGetTask(r.Context(), p.host, taskID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if coreTask == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, coreTaskToImageTask(coreTask))
+}
+
+func coreTaskToImageTask(t *sdk.HostTask) *ImageTask {
+	if t == nil {
+		return nil
+	}
+	task := &ImageTask{
+		ID:             t.ID,
+		UserID:         int(t.UserID),
+		Status:         t.Status.String(),
+		ErrorMessage:   t.ErrorMessage,
+		CreatedAt:      t.CreatedAt,
+		UpdatedAt:      t.UpdatedAt,
+		CompletedAt:    t.CompletedAt,
+		ConversationID: int64FromMap(t.Input, "conversation_id"),
+		GroupID:        int64FromMap(t.Input, "group_id"),
+		Platform:       stringFromMap(t.Input, "platform"),
+		Model:          stringFromMap(t.Input, "model"),
+		Prompt:         stringFromMap(t.Input, "prompt"),
+		ImageSize:      stringFromMap(t.Input, "image_size"),
+		Mode:           stringFromMap(t.Input, "mode"),
+		ResultContent:  stringFromMap(t.Output, "content"),
+		InputTokens:    intFromMap(t.Output, "input_tokens"),
+		OutputTokens:   intFromMap(t.Output, "output_tokens"),
+		Cost:           float64FromMap(t.Output, "cost"),
+	}
+	return task
+}
+
+func stringFromMap(m map[string]interface{}, key string) string {
+	v, _ := m[key].(string)
+	return v
+}
+
+func int64FromMap(m map[string]interface{}, key string) int64 {
+	switch v := m[key].(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case float64:
+		return int64(v)
+	default:
+		return 0
+	}
+}
+
+func intFromMap(m map[string]interface{}, key string) int {
+	return int(int64FromMap(m, key))
+}
+
+func float64FromMap(m map[string]interface{}, key string) float64 {
+	switch v := m[key].(type) {
+	case float64:
+		return v
+	case int64:
+		return float64(v)
+	case int:
+		return float64(v)
+	default:
+		return 0
+	}
+}
+
+func (p *Plugin) handleListImageTasks(w http.ResponseWriter, r *http.Request) {
+	userID := parseUserID(r)
+	result, err := hostListTasks(r.Context(), p.host, int64(userID), "image_generation", 50)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Filter by conversation_id if provided
+	convIDStr := r.URL.Query().Get("conversation_id")
+	convID, _ := strconv.ParseInt(convIDStr, 10, 64)
+
+	tasks := make([]*ImageTask, 0)
+	for _, t := range result.Tasks {
+		task := coreTaskToImageTask(t)
+		if convID > 0 && task.ConversationID != convID {
+			continue
+		}
+		tasks = append(tasks, task)
+	}
+	writeJSON(w, http.StatusOK, tasks)
+}
+
 // ── Metadata Handlers ──
 
 func (p *Plugin) handleListPlatforms(w http.ResponseWriter, r *http.Request) {
-	platforms, err := p.host.ListPlatforms(r.Context())
+	platforms, err := hostListPlatforms(r.Context(), p.host)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -475,16 +628,28 @@ func (p *Plugin) handleListModels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "platform query param required"})
 		return
 	}
-	models, err := p.host.ListModels(r.Context(), platform)
+	models, err := hostListModels(r.Context(), p.host, platform)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if cap := r.URL.Query().Get("capability"); cap != "" {
+		filtered := make([]sdk.ModelInfo, 0, len(models))
+		for _, m := range models {
+			for _, c := range m.Capabilities {
+				if c == cap {
+					filtered = append(filtered, m)
+					break
+				}
+			}
+		}
+		models = filtered
 	}
 	writeJSON(w, http.StatusOK, models)
 }
 
 func (p *Plugin) handleGetUserInfo(w http.ResponseWriter, r *http.Request) {
-	info, err := p.host.GetUserInfo(r.Context(), int64(parseUserID(r)))
+	info, err := hostGetUserInfo(r.Context(), p.host, int64(parseUserID(r)))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

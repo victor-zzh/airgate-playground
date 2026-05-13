@@ -1,6 +1,6 @@
 package playground
 
-import sdk "github.com/DouDOU-start/airgate-sdk"
+import sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 
 // PluginVersion defaults to the local development version.
 // Release builds override it with the git tag via ldflags.
@@ -16,11 +16,17 @@ func BuildPluginInfo() sdk.PluginInfo {
 		Author:      "AirGate",
 		Type:        sdk.PluginTypeExtension,
 		Capabilities: []sdk.Capability{
-			sdk.CapabilityHostForward,
-			sdk.CapabilityHostListPlatforms,
-			sdk.CapabilityHostListModels,
-			sdk.CapabilityHostGetUserInfo,
-			sdk.CapabilityHostAssetStorage,
+			sdk.CapabilityForHostMethod(hostMethodGatewayForward),
+			sdk.CapabilityForHostMethod(hostMethodPlatformsList),
+			sdk.CapabilityForHostMethod(hostMethodModelsList),
+			sdk.CapabilityForHostMethod(hostMethodUsersGet),
+			sdk.CapabilityForHostMethod(hostMethodAssetsStore),
+			sdk.CapabilityForHostMethod(hostMethodAssetsGetURL),
+			sdk.CapabilityForHostMethod(hostMethodAssetsGetBytes),
+			sdk.CapabilityForHostMethod(hostMethodTasksCreate),
+			sdk.CapabilityForHostMethod(hostMethodTasksUpdate),
+			sdk.CapabilityForHostMethod(hostMethodTasksGet),
+			sdk.CapabilityForHostMethod(hostMethodTasksList),
 		},
 		FrontendPages: []sdk.FrontendPage{
 			{
@@ -28,6 +34,13 @@ func BuildPluginInfo() sdk.PluginInfo {
 				Title:       "playground.title",
 				Icon:        "message-square",
 				Description: "AI chat playground",
+				Audience:    "all",
+			},
+			{
+				Path:        "/studio",
+				Title:       "playground.workflow_title",
+				Icon:        "image",
+				Description: "Creative studio for image generation",
 				Audience:    "all",
 			},
 		},
