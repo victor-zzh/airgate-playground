@@ -366,4 +366,3 @@ func int64FromAny(value interface{}) int64 {
 		return 0
 	}
 }
-
