@@ -3,12 +3,10 @@ module github.com/DouDOU-start/airgate-playground/backend
 go 1.25.7
 
 require (
-	github.com/DouDOU-start/airgate-sdk v0.0.1
+	github.com/DouDOU-start/airgate-sdk v0.0.0-20260514110732-56680479df13
 	github.com/lib/pq v1.10.9
 	google.golang.org/grpc v1.79.2
 )
-
-replace github.com/DouDOU-start/airgate-sdk => ../../airgate-sdk
 
 require (
 	github.com/fatih/color v1.13.0 // indirect
