@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -472,23 +473,16 @@ func convertResponseValueForStorage(ctx context.Context, storage *ObjectStorage,
 	switch val := v.(type) {
 	case map[string]any:
 		if b64, ok := val["b64_json"].(string); ok && b64 != "" {
-			asset, err := storage.StoreImageBase64(ctx, userID, convID, "image/png", b64)
-			if err != nil {
-				return val, err
+			if localURL, err := storeAndRegisterAsset(ctx, storage, db, userID, convID, func() (*StoredAsset, error) {
+				return storage.StoreImageBase64(ctx, userID, convID, "image/png", b64)
+			}); err == nil {
+				delete(val, "b64_json")
+				val["url"] = localURL
 			}
-			if _, err := db.ExecContext(ctx,
-				`INSERT INTO playground_assets (id, user_id, conversation_id, object_key, content_type, size_bytes)
-				 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
-				asset.ID, userID, convID, asset.ObjectKey, asset.ContentType, asset.SizeBytes,
-			); err != nil {
-				return val, err
+		} else if rawURL, ok := val["url"].(string); ok && isExternalURL(rawURL) {
+			if localURL, err := downloadAndStoreImage(ctx, storage, db, userID, convID, rawURL); err == nil {
+				val["url"] = localURL
 			}
-			publicURL, err := storage.PublicURL(ctx, asset.ObjectKey)
-			if err != nil {
-				return val, err
-			}
-			delete(val, "b64_json")
-			val["url"] = publicURL
 		}
 		for k, child := range val {
 			converted, err := convertResponseValueForStorage(ctx, storage, db, userID, convID, child)
@@ -510,6 +504,49 @@ func convertResponseValueForStorage(ctx context.Context, storage *ObjectStorage,
 	default:
 		return v, nil
 	}
+}
+
+func storeAndRegisterAsset(ctx context.Context, storage *ObjectStorage, db *sql.DB, userID int, convID int64, store func() (*StoredAsset, error)) (string, error) {
+	asset, err := store()
+	if err != nil {
+		return "", err
+	}
+	_, _ = db.ExecContext(ctx,
+		`INSERT INTO playground_assets (id, user_id, conversation_id, object_key, content_type, size_bytes)
+		 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
+		asset.ID, userID, convID, asset.ObjectKey, asset.ContentType, asset.SizeBytes,
+	)
+	return storage.PublicURL(ctx, asset.ObjectKey)
+}
+
+func isExternalURL(u string) bool {
+	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
+}
+
+func downloadAndStoreImage(ctx context.Context, storage *ObjectStorage, db *sql.DB, userID int, convID int64, imageURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download image failed: HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" || !strings.HasPrefix(contentType, "image/") {
+		contentType = "image/png"
+	}
+	return storeAndRegisterAsset(ctx, storage, db, userID, convID, func() (*StoredAsset, error) {
+		return storage.StoreImageBytes(ctx, userID, convID, contentType, data)
+	})
 }
 
 func usageMetricInt(usage *sdk.Usage, key string) int {
