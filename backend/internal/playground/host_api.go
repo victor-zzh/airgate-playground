@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 )
@@ -20,13 +19,8 @@ const (
 	hostMethodModelsList     = "models.list"
 	hostMethodUsersGet       = "users.get"
 	hostMethodAssetsStore    = "assets.store"
-	hostMethodAssetsStoreURL = "assets.store_url"
 	hostMethodAssetsGetURL   = "assets.get_url"
 	hostMethodAssetsGetBytes = "assets.get_bytes"
-	hostMethodTasksCreate    = "tasks.create"
-	hostMethodTasksUpdate    = "tasks.update"
-	hostMethodTasksGet       = "tasks.get"
-	hostMethodTasksList      = "tasks.list"
 )
 
 type hostForwardRequest struct {
@@ -53,23 +47,6 @@ type hostForwardChunk struct {
 	StatusCode int
 	Headers    http.Header
 	Data       []byte
-}
-
-type hostTaskListResult struct {
-	Tasks []*sdk.HostTask
-	Total int
-}
-
-type hostUpdateTaskRequest struct {
-	TaskID       int64
-	Status       sdk.TaskStatus
-	Progress     int
-	Stage        string
-	Output       map[string]interface{}
-	Attributes   map[string]interface{}
-	Execution    map[string]interface{}
-	UsageID      int
-	ErrorMessage string
 }
 
 type hostAssetBytes struct {
@@ -162,87 +139,6 @@ func hostForwardPayload(req hostForwardRequest) map[string]interface{} {
 	}
 }
 
-func hostCreateTask(ctx context.Context, host sdk.Host, taskType string, userID int64, input, attributes map[string]interface{}) (*sdk.HostTask, error) {
-	req := map[string]interface{}{
-		"task_type": taskType,
-		"user_id":   userID,
-		"input":     input,
-	}
-	if attributes != nil {
-		req["attributes"] = attributes
-	}
-	payload, err := hostInvoke(ctx, host, hostMethodTasksCreate, req)
-	if err != nil {
-		return nil, err
-	}
-	return hostTaskFromPayload(firstPayloadValue(payload, "task", "data", "result", ""))
-}
-
-func hostUpdateTask(ctx context.Context, host sdk.Host, req hostUpdateTaskRequest) error {
-	payload := map[string]interface{}{
-		"task_id": req.TaskID,
-	}
-	if req.Status != "" {
-		payload["status"] = req.Status.String()
-	}
-	if req.Progress > 0 {
-		payload["progress"] = req.Progress
-	}
-	if req.Stage != "" {
-		payload["stage"] = req.Stage
-	}
-	if req.Output != nil {
-		payload["output"] = req.Output
-	}
-	if req.Attributes != nil {
-		payload["attributes"] = req.Attributes
-	}
-	if req.Execution != nil {
-		payload["execution"] = req.Execution
-	}
-	if req.UsageID > 0 {
-		payload["usage_id"] = req.UsageID
-	}
-	if req.ErrorMessage != "" {
-		payload["error_message"] = req.ErrorMessage
-	}
-	_, err := hostInvoke(ctx, host, hostMethodTasksUpdate, payload)
-	return err
-}
-
-func hostGetTask(ctx context.Context, host sdk.Host, userID, taskID int64) (*sdk.HostTask, error) {
-	payload, err := hostInvoke(ctx, host, hostMethodTasksGet, map[string]interface{}{"task_id": taskID, "user_id": userID})
-	if err != nil {
-		return nil, err
-	}
-	return hostTaskFromPayload(firstPayloadValue(payload, "task", "data", "result", ""))
-}
-
-func hostListTasks(ctx context.Context, host sdk.Host, userID int64, taskType string, limit int) (*hostTaskListResult, error) {
-	payload, err := hostInvoke(ctx, host, hostMethodTasksList, map[string]interface{}{
-		"user_id":   userID,
-		"task_type": taskType,
-		"limit":     limit,
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := &hostTaskListResult{Total: intFromAny(firstPayloadValue(payload, "total", "count"))}
-	if tasks, ok := firstPayloadValue(payload, "tasks", "items", "data").([]interface{}); ok {
-		for _, item := range tasks {
-			task, err := hostTaskFromPayload(item)
-			if err != nil {
-				return nil, err
-			}
-			out.Tasks = append(out.Tasks, task)
-		}
-	}
-	if out.Total == 0 {
-		out.Total = len(out.Tasks)
-	}
-	return out, nil
-}
-
 func hostListPlatforms(ctx context.Context, host sdk.Host) ([]map[string]interface{}, error) {
 	payload, err := hostInvoke(ctx, host, hostMethodPlatformsList, nil)
 	if err != nil {
@@ -309,24 +205,6 @@ func hostStoreAsset(ctx context.Context, host sdk.Host, userID int64, scope, con
 	}, nil
 }
 
-func hostStoreAssetFromURL(ctx context.Context, host sdk.Host, userID int64, scope, sourceURL string) (*StoredAsset, error) {
-	payload, err := hostInvoke(ctx, host, hostMethodAssetsStoreURL, map[string]interface{}{
-		"user_id":    userID,
-		"scope":      scope,
-		"source_url": sourceURL,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &StoredAsset{
-		ID:          stringFromAny(firstPayloadValue(payload, "asset_id", "id")),
-		ObjectKey:   stringFromAny(firstPayloadValue(payload, "object_key")),
-		PublicURL:   stringFromAny(firstPayloadValue(payload, "public_url")),
-		ContentType: stringFromAny(firstPayloadValue(payload, "content_type")),
-		SizeBytes:   int64FromAny(firstPayloadValue(payload, "size_bytes")),
-	}, nil
-}
-
 func hostGetAssetURL(ctx context.Context, host sdk.Host, objectKey string) (string, error) {
 	payload, err := hostInvoke(ctx, host, hostMethodAssetsGetURL, map[string]interface{}{"object_key": objectKey})
 	if err != nil {
@@ -359,31 +237,6 @@ func firstPayloadValue(payload map[string]interface{}, keys ...string) interface
 		}
 	}
 	return nil
-}
-
-func hostTaskFromPayload(value interface{}) (*sdk.HostTask, error) {
-	m, ok := mapFromAny(value)
-	if !ok {
-		return nil, fmt.Errorf("core 返回的任务结构无效")
-	}
-	task := &sdk.HostTask{
-		ID:           int64FromAny(firstPayloadValue(m, "id", "task_id")),
-		PluginID:     stringFromAny(firstPayloadValue(m, "plugin_id")),
-		TaskType:     stringFromAny(firstPayloadValue(m, "task_type", "type")),
-		Status:       sdk.TaskStatus(stringFromAny(firstPayloadValue(m, "status"))),
-		UserID:       int64FromAny(firstPayloadValue(m, "user_id")),
-		Input:        mapValueFromAny(firstPayloadValue(m, "input")),
-		Output:       mapValueFromAny(firstPayloadValue(m, "output")),
-		ErrorMessage: stringFromAny(firstPayloadValue(m, "error_message", "error")),
-		Progress:     intFromAny(firstPayloadValue(m, "progress")),
-		Attempts:     intFromAny(firstPayloadValue(m, "attempts")),
-		MaxAttempts:  intFromAny(firstPayloadValue(m, "max_attempts")),
-		CreatedAt:    timeFromAny(firstPayloadValue(m, "created_at")),
-		UpdatedAt:    timeFromAny(firstPayloadValue(m, "updated_at")),
-	}
-	task.StartedAt = timePtrFromAny(firstPayloadValue(m, "started_at"))
-	task.CompletedAt = timePtrFromAny(firstPayloadValue(m, "completed_at"))
-	return task, nil
 }
 
 func headerPayload(headers http.Header) map[string]interface{} {
@@ -474,11 +327,6 @@ func mapFromAny(value interface{}) (map[string]interface{}, bool) {
 	return out, true
 }
 
-func mapValueFromAny(value interface{}) map[string]interface{} {
-	m, _ := mapFromAny(value)
-	return m
-}
-
 func stringFromAny(value interface{}) string {
 	switch v := value.(type) {
 	case string:
@@ -519,30 +367,3 @@ func int64FromAny(value interface{}) int64 {
 	}
 }
 
-func timeFromAny(value interface{}) time.Time {
-	if value == nil {
-		return time.Time{}
-	}
-	if t, ok := value.(time.Time); ok {
-		return t
-	}
-	raw := strings.TrimSpace(stringFromAny(value))
-	if raw == "" {
-		return time.Time{}
-	}
-	if ts, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-		return ts
-	}
-	if unix, err := strconv.ParseInt(raw, 10, 64); err == nil && unix > 0 {
-		return time.Unix(unix, 0)
-	}
-	return time.Time{}
-}
-
-func timePtrFromAny(value interface{}) *time.Time {
-	ts := timeFromAny(value)
-	if ts.IsZero() {
-		return nil
-	}
-	return &ts
-}

@@ -36,11 +36,6 @@ func (p *Plugin) RegisterRoutes(r sdk.RouteRegistrar) {
 	r.Handle(http.MethodPost, "/messages", p.requireUser(p.handlePersistMessage))
 	r.Handle(http.MethodPost, "/chat/completions", p.requireUser(p.handleChatCompletions))
 
-	// Generation tasks
-	r.Handle(http.MethodPost, "/generation-tasks", p.requireUser(p.handleCreateGenerationTask))
-	r.Handle(http.MethodGet, "/generation-tasks", p.requireUser(p.handleListGenerationTasks))
-	r.Handle(http.MethodGet, "/generation-tasks/", p.requireUser(p.handleGetGenerationTask))
-
 	// Metadata (platforms, models, user info)
 	r.Handle(http.MethodGet, "/platforms", p.requireUser(p.handleListPlatforms))
 	r.Handle(http.MethodGet, "/models", p.requireUser(p.handleListModels))
@@ -372,125 +367,6 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── Generation Task Handlers ──
-
-func (p *Plugin) handleCreateGenerationTask(w http.ResponseWriter, r *http.Request) {
-	var req CreateGenerationTaskRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-	normalizeGenerationRequest(&req)
-
-	userID := parseUserID(r)
-
-	if req.Platform == "" || req.Model == "" || strings.TrimSpace(req.Prompt) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "platform, model, and prompt are required"})
-		return
-	}
-	groupID := req.GroupID
-	if req.ConversationID > 0 && groupID <= 0 {
-		conv, err := p.svc.GetConversation(r.Context(), userID, req.ConversationID)
-		if err != nil || conv == nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "conversation not found"})
-			return
-		}
-		groupID = conv.GroupID
-	}
-	if groupID <= 0 {
-		groupID = int64(p.svc.opts.DefaultGroupID)
-	}
-	if groupID <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "group_id is required"})
-		return
-	}
-
-	if req.ConversationID > 0 && shouldPersistGenerationUserMessage(req.ClientContext) {
-		content := req.MessageContent
-		if strings.TrimSpace(content) == "" {
-			content = req.Prompt
-		}
-		storedContent, err := p.svc.storeContentAssets(r.Context(), userID, req.ConversationID, content)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		if _, err := p.svc.saveMessage(r.Context(), req.ConversationID, "user", storedContent, "", "", req.Platform, req.Model, groupID, 0, 0, 0); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-	}
-
-	coreTask, err := hostCreateTask(
-		r.Context(),
-		p.host,
-		generationTaskType,
-		int64(userID),
-		generationTaskInputMap(req, groupID),
-		generationTaskAttributes(req, groupID),
-	)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, coreTaskToGenerationTask(coreTask))
-}
-
-func shouldPersistGenerationUserMessage(ctx map[string]interface{}) bool {
-	if ctx == nil {
-		return true
-	}
-	value, ok := ctx["persist_user_message"]
-	if !ok {
-		return true
-	}
-	if enabled, ok := value.(bool); ok {
-		return enabled
-	}
-	return true
-}
-
-func (p *Plugin) handleGetGenerationTask(w http.ResponseWriter, r *http.Request) {
-	taskID := parsePathID(r.URL.Path, "/generation-tasks/")
-	if taskID <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid task id"})
-		return
-	}
-	userID := parseUserID(r)
-	coreTask, err := hostGetTask(r.Context(), p.host, int64(userID), taskID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if coreTask == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
-		return
-	}
-	writeJSON(w, http.StatusOK, coreTaskToGenerationTask(coreTask))
-}
-
-func (p *Plugin) handleListGenerationTasks(w http.ResponseWriter, r *http.Request) {
-	userID := parseUserID(r)
-	result, err := hostListTasks(r.Context(), p.host, int64(userID), generationTaskType, 100)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	// Filter by conversation_id if provided
-	convIDStr := r.URL.Query().Get("conversation_id")
-	convID, _ := strconv.ParseInt(convIDStr, 10, 64)
-
-	tasks := make([]*GenerationTask, 0)
-	for _, t := range result.Tasks {
-		task := coreTaskToGenerationTask(t)
-		if convID > 0 && task.ConversationID != convID {
-			continue
-		}
-		tasks = append(tasks, task)
-	}
-	writeJSON(w, http.StatusOK, tasks)
-}
 
 // ── Metadata Handlers ──
 

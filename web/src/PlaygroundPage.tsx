@@ -1,13 +1,8 @@
-import { Suspense, lazy } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cssVar } from '@doudou-start/airgate-theme';
 import { PlaygroundProvider, usePlayground } from './playground/PlaygroundContext';
 import { ChatView } from './playground/ChatView';
-import { StudioView } from './playground/studio/StudioView';
 import { styles, keyframes } from './playground/styles';
-import { IMAGE_STUDIO_ENABLED } from './playground/constants';
-
-const ImageStudioPage = lazy(() => import('./ImageStudioPage'));
 
 // ── Chat page (/chat) ──────────────────────────────────────────────
 
@@ -31,22 +26,9 @@ function ChatShell() {
     editCanvasRef, editCanvasContainerRef,
     cancelEditPanel, triggerEditImagePicker, clearEditSelection, confirmEditSelection,
     handleSelectionPointerDown, handleSelectionPointerMove, finishSelectionDrag,
-    editSelection, error,
+    editSelection, error, userInfo,
     sidebarConversations, createConversation, openConversation, deleteConversation,
-    userInfo, setUserInfo, studioMode, setStudioMode,
   } = usePlayground();
-
-  if (IMAGE_STUDIO_ENABLED && studioMode) {
-    return (
-      <Suspense fallback={<div style={styles.studioLoading}>{t('playground.loading', { defaultValue: 'Loading...' })}</div>}>
-        <ImageStudioPage
-          onExit={() => setStudioMode(false)}
-          userInfo={userInfo}
-          onUserInfoChange={setUserInfo}
-        />
-      </Suspense>
-    );
-  }
 
   return (
     <div data-full-bleed data-pg-aesthetic style={styles.layout}>
@@ -80,23 +62,6 @@ function ChatShell() {
               </svg>
             </button>
           </div>
-
-          {IMAGE_STUDIO_ENABLED && (
-            <div style={styles.modeSwitcher}>
-              <button type="button" style={{ ...styles.modeSwitcherItem, ...styles.modeSwitcherItemActive }} aria-pressed={true}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                </svg>
-                <span>{t('playground.mode_chat', { defaultValue: 'Chat' })}</span>
-              </button>
-              <button type="button" style={styles.modeSwitcherItem} onClick={() => setStudioMode(true)} title={t('playground.mode_studio_hint', { defaultValue: 'Open Image Studio' })}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" />
-                </svg>
-                <span>{t('playground.mode_studio', { defaultValue: 'Studio' })}</span>
-              </button>
-            </div>
-          )}
 
           <div style={styles.convList}>
             {sidebarConversations.map(c => {
@@ -145,13 +110,6 @@ function ChatShell() {
               <path d="M6 2v12" /><path d="M2 2h12v12H2z" /><path d="M8 6l2 2-2 2" />
             </svg>
           </button>
-          {IMAGE_STUDIO_ENABLED && (
-            <button style={{ ...styles.toggleBtn, marginTop: 4 }} onClick={() => setStudioMode(true)} aria-label={t('playground.mode_studio_hint', { defaultValue: 'Open Image Studio' })} title={t('playground.mode_studio_hint', { defaultValue: 'Open Image Studio' })}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" />
-              </svg>
-            </button>
-          )}
         </div>
       )}
 
@@ -160,15 +118,6 @@ function ChatShell() {
         <ChatView />
       </div>
 
-      <style>{keyframes}</style>
-    </div>
-  );
-}
-
-export function WorkflowPage() {
-  return (
-    <div data-full-bleed data-pg-aesthetic style={styles.layout}>
-      <StudioView />
       <style>{keyframes}</style>
     </div>
   );

@@ -21,13 +21,8 @@ func BuildPluginInfo() sdk.PluginInfo {
 			sdk.CapabilityForHostMethod(hostMethodModelsList),
 			sdk.CapabilityForHostMethod(hostMethodUsersGet),
 			sdk.CapabilityForHostMethod(hostMethodAssetsStore),
-			sdk.CapabilityForHostMethod(hostMethodAssetsStoreURL),
 			sdk.CapabilityForHostMethod(hostMethodAssetsGetURL),
 			sdk.CapabilityForHostMethod(hostMethodAssetsGetBytes),
-			sdk.CapabilityForHostMethod(hostMethodTasksCreate),
-			sdk.CapabilityForHostMethod(hostMethodTasksUpdate),
-			sdk.CapabilityForHostMethod(hostMethodTasksGet),
-			sdk.CapabilityForHostMethod(hostMethodTasksList),
 		},
 		FrontendPages: []sdk.FrontendPage{
 			{
@@ -35,13 +30,6 @@ func BuildPluginInfo() sdk.PluginInfo {
 				Title:       "playground.title",
 				Icon:        "message-square",
 				Description: "AI chat playground",
-				Audience:    "all",
-			},
-			{
-				Path:        "/studio",
-				Title:       "playground.workflow_title",
-				Icon:        "image",
-				Description: "Creative studio for image generation",
 				Audience:    "all",
 			},
 		},

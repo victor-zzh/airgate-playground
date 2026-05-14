@@ -159,16 +159,6 @@ func (s *Service) ListMessages(ctx context.Context, userID int, convID int64) ([
 	return msgs, rows.Err()
 }
 
-func (s *Service) hasMessageContent(ctx context.Context, convID int64, role, content string) (bool, error) {
-	var count int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM playground_messages
-		 WHERE conversation_id = $1 AND role = $2 AND content = $3`,
-		convID, role, content,
-	).Scan(&count)
-	return count > 0, err
-}
-
 func (s *Service) saveMessage(ctx context.Context, convID int64, role, content, reasoning, reasoningEffort, platform, model string, groupID int64, inputTokens, outputTokens int, cost float64) (*Message, error) {
 	m := &Message{
 		ConversationID:  convID,

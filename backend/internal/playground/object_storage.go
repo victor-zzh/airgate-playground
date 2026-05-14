@@ -101,24 +101,6 @@ func (s *ObjectStorage) StoreImageBytes(ctx context.Context, userID int, convers
 	}, nil
 }
 
-func (s *ObjectStorage) StoreImageFromURL(ctx context.Context, userID int, conversationID int64, sourceURL string) (*StoredAsset, error) {
-	scope := "playground/scratch"
-	if conversationID > 0 {
-		scope = fmt.Sprintf("playground/conversation-%d", conversationID)
-	}
-	asset, err := hostStoreAssetFromURL(ctx, s.host, int64(userID), scope, sourceURL)
-	if err != nil {
-		return nil, err
-	}
-	return &StoredAsset{
-		ID:          asset.ID,
-		ObjectKey:   filepath.ToSlash(asset.ObjectKey),
-		PublicURL:   asset.PublicURL,
-		ContentType: asset.ContentType,
-		SizeBytes:   asset.SizeBytes,
-	}, nil
-}
-
 func (s *ObjectStorage) PublicURL(ctx context.Context, objectKey string) (string, error) {
 	return hostGetAssetURL(ctx, s.host, objectKey)
 }
