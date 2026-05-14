@@ -21,6 +21,7 @@ func BuildPluginInfo() sdk.PluginInfo {
 			sdk.CapabilityForHostMethod(hostMethodModelsList),
 			sdk.CapabilityForHostMethod(hostMethodUsersGet),
 			sdk.CapabilityForHostMethod(hostMethodAssetsStore),
+			sdk.CapabilityForHostMethod(hostMethodAssetsStoreURL),
 			sdk.CapabilityForHostMethod(hostMethodAssetsGetURL),
 			sdk.CapabilityForHostMethod(hostMethodAssetsGetBytes),
 			sdk.CapabilityForHostMethod(hostMethodTasksCreate),

@@ -20,6 +20,7 @@ const (
 	hostMethodModelsList     = "models.list"
 	hostMethodUsersGet       = "users.get"
 	hostMethodAssetsStore    = "assets.store"
+	hostMethodAssetsStoreURL = "assets.store_url"
 	hostMethodAssetsGetURL   = "assets.get_url"
 	hostMethodAssetsGetBytes = "assets.get_bytes"
 	hostMethodTasksCreate    = "tasks.create"
@@ -295,6 +296,24 @@ func hostStoreAsset(ctx context.Context, host sdk.Host, userID int64, scope, con
 		"content_type":   contentType,
 		"file_extension": fileExtension,
 		"data":           data,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &StoredAsset{
+		ID:          stringFromAny(firstPayloadValue(payload, "asset_id", "id")),
+		ObjectKey:   stringFromAny(firstPayloadValue(payload, "object_key")),
+		PublicURL:   stringFromAny(firstPayloadValue(payload, "public_url")),
+		ContentType: stringFromAny(firstPayloadValue(payload, "content_type")),
+		SizeBytes:   int64FromAny(firstPayloadValue(payload, "size_bytes")),
+	}, nil
+}
+
+func hostStoreAssetFromURL(ctx context.Context, host sdk.Host, userID int64, scope, sourceURL string) (*StoredAsset, error) {
+	payload, err := hostInvoke(ctx, host, hostMethodAssetsStoreURL, map[string]interface{}{
+		"user_id":    userID,
+		"scope":      scope,
+		"source_url": sourceURL,
 	})
 	if err != nil {
 		return nil, err

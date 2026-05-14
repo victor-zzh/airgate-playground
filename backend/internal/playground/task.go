@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -524,28 +523,8 @@ func isExternalURL(u string) bool {
 }
 
 func downloadAndStoreImage(ctx context.Context, storage *ObjectStorage, db *sql.DB, userID int, convID int64, imageURL string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download image failed: HTTP %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" || !strings.HasPrefix(contentType, "image/") {
-		contentType = "image/png"
-	}
 	return storeAndRegisterAsset(ctx, storage, db, userID, convID, func() (*StoredAsset, error) {
-		return storage.StoreImageBytes(ctx, userID, convID, contentType, data)
+		return storage.StoreImageFromURL(ctx, userID, convID, imageURL)
 	})
 }
 
