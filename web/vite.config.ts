@@ -1,7 +1,13 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import { copyFileSync, cpSync, mkdirSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const SHARED_MODULES = ['react', 'react-dom', 'react/jsx-runtime', 'react-i18next'];
+const projectRoot = dirname(fileURLToPath(import.meta.url));
+const katexDistDir = join(projectRoot, 'node_modules', 'katex', 'dist');
+const katexOutDir = join(projectRoot, 'dist', 'katex');
 
 function sharedModulesPlugin(): Plugin {
   return {
@@ -57,12 +63,27 @@ function sharedModulesPlugin(): Plugin {
   };
 }
 
+function copyKatexAssets() {
+  rmSync(katexOutDir, { force: true, recursive: true });
+  mkdirSync(katexOutDir, { recursive: true });
+  copyFileSync(join(katexDistDir, 'katex.min.css'), join(katexOutDir, 'katex.min.css'));
+  copyFileSync(join(katexDistDir, 'katex.min.js'), join(katexOutDir, 'katex.min.js'));
+  cpSync(join(katexDistDir, 'fonts'), join(katexOutDir, 'fonts'), { recursive: true });
+}
+
 const watchOptions = process.argv.includes('--watch')
   ? { chokidar: { usePolling: true, interval: 1000 } }
   : undefined;
 
 export default defineConfig({
-  plugins: [react(), sharedModulesPlugin()],
+  plugins: [
+    react(),
+    sharedModulesPlugin(),
+    {
+      name: 'copy-katex-assets',
+      writeBundle: copyKatexAssets,
+    },
+  ],
   define: {
     'process.env.NODE_ENV': JSON.stringify('production'),
   },
