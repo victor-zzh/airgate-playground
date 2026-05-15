@@ -47,6 +47,11 @@ function loadKatex() {
 
   katexPromise = new Promise<KatexRuntime>((resolve, reject) => {
     const existing = document.getElementById(KATEX_SCRIPT_ID) as HTMLScriptElement | null;
+    if (existing && window.katex) {
+      resolve(window.katex);
+      return;
+    }
+
     const script = existing ?? document.createElement('script');
 
     script.id = KATEX_SCRIPT_ID;
@@ -54,9 +59,16 @@ function loadKatex() {
     script.src = `${KATEX_ASSET_BASE}/katex.min.js`;
     script.onload = () => {
       if (window.katex) resolve(window.katex);
-      else reject(new Error('KaTeX did not initialize'));
+      else {
+        katexPromise = null;
+        reject(new Error('KaTeX did not initialize'));
+      }
     };
-    script.onerror = () => reject(new Error('Failed to load KaTeX'));
+    script.onerror = () => {
+      katexPromise = null;
+      script.remove();
+      reject(new Error('Failed to load KaTeX'));
+    };
 
     if (!existing) {
       document.head.appendChild(script);
