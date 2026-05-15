@@ -6,13 +6,13 @@ help: ## 显示帮助信息
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 install: ## 安装前后端依赖
-	cd web && npm install
+	cd web && pnpm install
 	cd backend && $(GO) mod download
 
 build: build-web build-backend ## 完整构建
 
 build-web: ## 构建前端
-	cd web && npm run build
+	cd web && pnpm build
 
 webdist: build-web ## 准备后端嵌入的前端产物
 	rm -rf backend/internal/playground/webdist
@@ -36,7 +36,7 @@ lint: ## 代码检查
 		exit 1; \
 	fi
 	@cd backend && golangci-lint run ./...
-	@cd web && npm run type-check
+	@cd web && pnpm type-check
 
 fmt: ## 格式化代码
 	@cd backend && $(GO) fmt ./...
