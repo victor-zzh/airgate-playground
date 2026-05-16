@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"strings"
 
 	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 )
@@ -28,6 +29,7 @@ func (p *Plugin) Info() sdk.PluginInfo {
 
 func (p *Plugin) Init(ctx sdk.PluginContext) error {
 	p.ctx = ctx
+	p.logger = slog.Default()
 	if ctx != nil {
 		p.logger = ctx.Logger()
 	}
@@ -41,26 +43,46 @@ func (p *Plugin) Init(ctx sdk.PluginContext) error {
 	}
 
 	cfg := ctx.Config()
-	dsn := cfg.GetString("plugin_dsn")
-	if dsn == "" {
-		dsn = cfg.GetString("db_dsn")
+	type dsnCandidate struct {
+		name string
+		dsn  string
 	}
-	if dsn == "" {
+	candidates := []dsnCandidate{
+		{name: sdk.PluginDSNConfigKey, dsn: strings.TrimSpace(cfg.GetString(sdk.PluginDSNConfigKey))},
+		{name: "db_dsn", dsn: strings.TrimSpace(cfg.GetString("db_dsn"))},
+	}
+	var lastErr error
+	seen := map[string]bool{}
+	for _, candidate := range candidates {
+		if candidate.dsn == "" || seen[candidate.dsn] {
+			continue
+		}
+		seen[candidate.dsn] = true
+
+		db, err := sql.Open("postgres", candidate.dsn)
+		if err != nil {
+			lastErr = err
+			p.logger.Warn("failed to open DB; trying next DSN if available", "dsn_source", candidate.name, "error", err)
+			continue
+		}
+		if err := db.Ping(); err != nil {
+			_ = db.Close()
+			lastErr = err
+			p.logger.Warn("failed to ping DB; trying next DSN if available", "dsn_source", candidate.name, "error", err)
+			continue
+		}
+		p.db = db
+		p.logger.Info("playground DB connected", "dsn_source", candidate.name)
+		break
+	}
+	if len(seen) == 0 {
 		p.logger.Warn("plugin_dsn/db_dsn not configured; playground loading in unconfigured mode")
 		return nil
 	}
-
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		p.logger.Warn("failed to open DB; plugin loading in unconfigured mode", "error", err)
+	if p.db == nil {
+		p.logger.Warn("failed to connect DB; playground loading in unconfigured mode", "error", lastErr)
 		return nil
 	}
-	if err := db.Ping(); err != nil {
-		_ = db.Close()
-		p.logger.Warn("failed to ping DB; plugin loading in unconfigured mode", "error", err)
-		return nil
-	}
-	p.db = db
 
 	storage := NewObjectStorage(p.host)
 

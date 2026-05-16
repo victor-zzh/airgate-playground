@@ -298,8 +298,8 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const messagesArea = messagesAreaRef.current;
     if (!messagesArea) return;
-    messagesArea.scrollTo({ top: messagesArea.scrollHeight, behavior: 'smooth' });
-  }, [messages, streamContent, streamReasoning]);
+    messagesArea.scrollTo({ top: messagesArea.scrollHeight, behavior: isStreaming ? 'auto' : 'smooth' });
+  }, [isStreaming, messages, streamContent, streamReasoning]);
 
   useEffect(() => {
     if (!isStreaming && pendingRefocusRef.current) {
@@ -716,7 +716,14 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
       value={value}
       onChange={event => onChange(event.target.value)}
       aria-label={ariaLabel}
-      style={{ ...styles.selectTrigger, minWidth: 180, appearance: 'auto', ...style }}
+      style={{
+        ...styles.selectTrigger,
+        minWidth: id === 'model' ? 180 : 96,
+        maxWidth: id === 'model' ? 260 : 120,
+        flexShrink: id === 'model' ? 1 : 0,
+        appearance: 'auto',
+        ...style,
+      }}
     >
       {options.map(option => (
         <option key={option.value} value={option.value}>{option.label}</option>

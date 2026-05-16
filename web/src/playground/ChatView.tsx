@@ -138,7 +138,7 @@ export function ChatView() {
           );
         })}
 
-        {isActiveConversationStreaming && streamContent && (
+        {isActiveConversationStreaming && (
           <div style={{
             ...styles.messageRow,
             ...(isMobile ? styles.messageRowMobile : null),
@@ -156,37 +156,19 @@ export function ChatView() {
                   </div>
                 </details>
               )}
-              {renderCopyableMessageContent(`stream-${streamConversationId || 'active'}`, streamContent)}
-              <div style={styles.messageMeta}>
-                <span style={styles.streamingDot} />
-                <span>{t('playground.streaming')}</span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {isActiveConversationStreaming && !streamContent && (
-          <div style={{
-            ...styles.messageRow,
-            ...(isMobile ? styles.messageRowMobile : null),
-            ...styles.messageRowAssistant,
-          }}>
-            <div style={styles.assistantBlock}>
-              {streamReasoning && thinkingVisible ? (
-                <details style={styles.reasoningBox} open>
-                  <summary style={styles.reasoningSummary}>
-                    <span>{t('playground.thinking_title', { defaultValue: 'Thinking' })}</span>
-                    {renderCopyButton(streamReasoning, t('playground.copy_thinking', { defaultValue: 'Copy thinking' }), true)}
-                  </summary>
-                  <div style={styles.reasoningContent}>
-                    {renderMessageContent(streamReasoning, interactiveMessageOptions)}
+              {streamContent ? (
+                <>
+                  {renderCopyableMessageContent(`stream-${streamConversationId || 'active'}`, streamContent)}
+                  <div style={styles.messageMeta}>
+                    <span style={styles.streamingDot} />
+                    <span>{t('playground.streaming')}</span>
                   </div>
-                </details>
-              ) : (
+                </>
+              ) : !streamReasoning || !thinkingVisible ? (
                 <div style={{ ...styles.messageContent, opacity: 0.5 }}>
                   <span style={styles.thinkingDots}>{t('playground.thinking')}</span>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
         )}
