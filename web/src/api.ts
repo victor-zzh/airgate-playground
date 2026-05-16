@@ -1,5 +1,4 @@
 const BASE = '/api/v1/ext-user/airgate-playground';
-const CORE_BASE = '/api/v1';
 
 function getStoredToken() {
   if (typeof window === 'undefined') return '';
@@ -54,14 +53,6 @@ async function request<T>(method: string, path: string, body?: unknown, base = B
   return text ? JSON.parse(text) as T : null as unknown as T;
 }
 
-async function coreRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const resp = await request<{ code: number; data: T; message: string }>(method, path, body, CORE_BASE);
-  if (resp.code !== 0) {
-    throw new Error(resp.message || 'request failed');
-  }
-  return resp.data;
-}
-
 // ── Types ──
 
 export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -93,53 +84,6 @@ export interface Message {
   created_at: string;
 }
 
-export interface ModelInfo {
-  id: string;
-  name: string;
-  platform?: string;
-  input_price: number;
-  output_price: number;
-  context_window: number;
-  max_output_tokens: number;
-  image_only?: boolean;
-  capabilities?: string[];
-}
-
-interface ProviderModelInfo {
-  id?: string;
-  ID?: string;
-  name?: string;
-  Name?: string;
-  input_price?: number;
-  InputPrice?: number;
-  output_price?: number;
-  OutputPrice?: number;
-  context_window?: number;
-  ContextWindow?: number;
-  max_output_tokens?: number;
-  MaxOutputTokens?: number;
-  image_only?: boolean;
-  ImageOnly?: boolean;
-  capabilities?: string[];
-  Capabilities?: string[];
-}
-
-interface ProviderModelListResponse {
-  data?: ProviderModelInfo[];
-}
-
-export interface PlatformInfo {
-  name: string;
-  display_name: string;
-}
-
-interface ProviderPlatformInfo {
-  name?: string;
-  Name?: string;
-  display_name?: string;
-  DisplayName?: string;
-}
-
 export interface UserInfo {
   id: number;
   username: string;
@@ -150,50 +94,6 @@ export interface UserInfo {
   api_key_id?: number;
   api_key_name?: string;
   api_key_platform?: string;
-}
-
-export interface GenerationInputAsset {
-  type: string;
-  role?: string;
-  url: string;
-}
-
-export interface CreateGenerationTaskRequest {
-  conversation_id?: number;
-  kind: string;
-  operation: string;
-  platform: string;
-  model: string;
-  prompt: string;
-  group_id?: number;
-  parameters?: Record<string, unknown>;
-  inputs?: GenerationInputAsset[];
-  mask?: GenerationInputAsset;
-  message_content?: string;
-  client_context?: Record<string, unknown>;
-}
-
-export interface GenerationTask {
-  id: number;
-  task_id?: number;
-  user_id: number;
-  conversation_id?: number;
-  kind: string;
-  operation: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  stage?: string;
-  progress?: number;
-  platform: string;
-  model: string;
-  prompt: string;
-  group_id?: number;
-  parameters?: Record<string, unknown>;
-  result_content?: string;
-  error_message?: string;
-  usage_id?: number;
-  created_at: string;
-  updated_at: string;
-  completed_at?: string;
 }
 
 export interface PersistedMessageRequest {
@@ -208,28 +108,6 @@ export interface PersistedMessageRequest {
   input_tokens?: number;
   output_tokens?: number;
   cost?: number;
-}
-
-export interface APIKeyItem {
-  id: number;
-  name: string;
-  key?: string;
-  key_prefix: string;
-  group_id: number | null;
-  status: string;
-}
-
-export interface GroupItem {
-  id: number;
-  name: string;
-  platform: string;
-}
-
-export interface PagedResponse<T> {
-  list: T[];
-  total: number;
-  page: number;
-  page_size: number;
 }
 
 export type ChatMessageContent = string | Array<
@@ -252,11 +130,6 @@ export const api = {
   createConversation: (data: { title?: string; group_id?: number; platform?: string; model?: string }) =>
     request<Conversation>('POST', '/conversations', data),
 
-  getConversation: (id: number) => request<Conversation>('GET', `/conversations/${id}`),
-
-  updateConversation: (id: number, data: { title?: string; group_id?: number; platform?: string; model?: string }) =>
-    request<{ status: string }>('PUT', `/conversations/${id}`, data),
-
   deleteConversation: (id: number) =>
     request<{ status: string }>('DELETE', `/conversations/${id}`),
 
@@ -264,50 +137,7 @@ export const api = {
 
   persistMessage: (data: PersistedMessageRequest) => request<Message>('POST', '/messages', data),
 
-  updateMessage: (id: number, data: { content: string; input_tokens?: number; output_tokens?: number; cost?: number }) =>
-    request<Message>('PUT', `/messages/${id}`, data),
-
-  listPlatforms: async () => {
-    const payload = await request<ProviderPlatformInfo[]>('GET', '/platforms');
-    return payload
-      .map(item => {
-        const name = item.name || item.Name || '';
-        const displayName = item.display_name || item.DisplayName || name;
-        return { name, display_name: displayName };
-      })
-      .filter(item => item.name);
-  },
-
-  listModels: async (platform: string, capability?: string) => {
-    let url = `/models?platform=${encodeURIComponent(platform)}`;
-    if (capability) url += `&capability=${encodeURIComponent(capability)}`;
-    const payload = await request<ProviderModelListResponse | ProviderModelInfo[]>('GET', url);
-    const data = Array.isArray(payload) ? payload : payload.data || [];
-    return data.map(item => {
-      const id = item.id || item.ID || '';
-      return {
-        id,
-        name: item.name || item.Name || id,
-        platform,
-        input_price: item.input_price ?? item.InputPrice ?? 0,
-        output_price: item.output_price ?? item.OutputPrice ?? 0,
-        context_window: item.context_window ?? item.ContextWindow ?? 0,
-        max_output_tokens: item.max_output_tokens ?? item.MaxOutputTokens ?? 0,
-        image_only: Boolean(item.image_only ?? item.ImageOnly),
-        capabilities: item.capabilities || item.Capabilities || [],
-      };
-    }).filter(item => item.id);
-  },
-
-  getUserInfo: () => coreRequest<UserInfo>('GET', '/users/me'),
-
-  createGenerationTask: (data: CreateGenerationTaskRequest) =>
-    request<GenerationTask>('POST', '/generation-tasks', data),
-
-  getGenerationTask: (id: number) => request<GenerationTask>('GET', `/generation-tasks/${id}`),
-
-  listGenerationTasks: (conversationId?: number) =>
-    request<GenerationTask[]>('GET', conversationId ? `/generation-tasks?conversation_id=${conversationId}` : '/generation-tasks'),
+  getUserInfo: () => request<UserInfo>('GET', '/user/info'),
 };
 
 export async function chatCompletionsStream(

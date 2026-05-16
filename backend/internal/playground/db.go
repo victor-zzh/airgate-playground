@@ -44,29 +44,6 @@ type Asset struct {
 	CreatedAt      time.Time
 }
 
-type GenerationTask struct {
-	ID             int64                  `json:"id"`
-	TaskID         int64                  `json:"task_id"`
-	UserID         int                    `json:"user_id"`
-	ConversationID int64                  `json:"conversation_id,omitempty"`
-	Kind           string                 `json:"kind"`
-	Operation      string                 `json:"operation"`
-	Status         string                 `json:"status"`
-	Stage          string                 `json:"stage,omitempty"`
-	Progress       int                    `json:"progress"`
-	Platform       string                 `json:"platform"`
-	Model          string                 `json:"model"`
-	Prompt         string                 `json:"prompt"`
-	GroupID        int64                  `json:"group_id,omitempty"`
-	Parameters     map[string]interface{} `json:"parameters,omitempty"`
-	ResultContent  string                 `json:"result_content,omitempty"`
-	ErrorMessage   string                 `json:"error_message,omitempty"`
-	UsageID        int                    `json:"usage_id,omitempty"`
-	CreatedAt      time.Time              `json:"created_at"`
-	UpdatedAt      time.Time              `json:"updated_at"`
-	CompletedAt    *time.Time             `json:"completed_at,omitempty"`
-}
-
 func migrate(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS playground_conversations (

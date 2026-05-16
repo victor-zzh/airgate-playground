@@ -1,7 +1,7 @@
 import { Children, Suspense, cloneElement, isValidElement, lazy, useState, type ReactNode } from 'react';
 import type { MessageContentOptions, PreviewImage } from './types';
 import { styles } from './styles';
-import { isSafeImageUrl, isSafeLinkUrl, parseImageEditAnnotations, stripImageEditAnnotations } from './utils';
+import { isSafeImageUrl, isSafeLinkUrl } from './utils';
 import { IMAGE_MARKDOWN_ITEM_RE } from './constants';
 
 const MathRenderer = lazy(() => import('../MathRenderer'));
@@ -22,9 +22,6 @@ export function GeneratedImageFrame({ url, alt, options, imageIndex }: {
   url: string; alt: string; options: MessageContentOptions; imageIndex: number;
 }) {
   const [dimensions, setDimensions] = useState('');
-  const image = { url, alt };
-  const annotation = options.imageEditAnnotations?.find(item => item.imageIndex === imageIndex);
-  const imageActions = options.imageActions?.(image, imageIndex);
   const imageNode = (
     <img
       src={url}
@@ -39,21 +36,6 @@ export function GeneratedImageFrame({ url, alt, options, imageIndex }: {
       }}
     />
   );
-  const annotatedImage = annotation ? (
-    <span style={styles.generatedImageOverlayWrap}>
-      {imageNode}
-      <span style={styles.generatedImageDimOverlay} />
-      <span
-        style={{
-          ...styles.generatedImageSelection,
-          left: `${annotation.rect.x * 100}%`,
-          top: `${annotation.rect.y * 100}%`,
-          width: `${annotation.rect.width * 100}%`,
-          height: `${annotation.rect.height * 100}%`,
-        }}
-      />
-    </span>
-  ) : imageNode;
   const previewTitle = options.imagePreviewTitle || 'Preview image';
   const previewableImage = options.onImagePreview ? (
     <button
@@ -63,14 +45,13 @@ export function GeneratedImageFrame({ url, alt, options, imageIndex }: {
       aria-label={previewTitle}
       onClick={() => options.onImagePreview?.(url, alt, imageIndex)}
     >
-      {annotatedImage}
+      {imageNode}
     </button>
-  ) : annotatedImage;
+  ) : imageNode;
 
   return (
     <span style={{ ...styles.generatedImageFrame, ...(options.isMobile ? styles.generatedImageFrameMobile : null) }}>
       {previewableImage}
-      {imageActions && <span style={styles.generatedImageActions}>{imageActions}</span>}
       {dimensions && <span style={styles.generatedImageDimensions}>{dimensions}</span>}
     </span>
   );
@@ -222,17 +203,15 @@ export function appendTrailingInlineAction(nodes: ReactNode[], action?: ReactNod
 }
 
 export function renderMessageContent(content: string, options: MessageContentOptions = {}) {
-  const cleanContent = stripImageEditAnnotations(content);
   let imageIndex = -1;
   const renderOptions: MessageContentOptions = {
     ...options,
-    imageEditAnnotations: options.imageEditAnnotations || parseImageEditAnnotations(content),
     takeImageIndex: () => {
       imageIndex += 1;
       return imageIndex;
     },
   };
-  const lines = cleanContent.replace(/\r\n?/g, '\n').split('\n');
+  const lines = content.replace(/\r\n?/g, '\n').split('\n');
   const nodes: ReactNode[] = [];
   let paragraph: string[] = [];
   let quote: string[] = [];
@@ -408,5 +387,5 @@ export function renderMessageContent(content: string, options: MessageContentOpt
   flushPendingImageGroup();
 
   const renderedNodes = appendTrailingInlineAction(nodes, options.trailingInlineAction);
-  return renderedNodes.length > 0 ? renderedNodes : cleanContent;
+  return renderedNodes.length > 0 ? renderedNodes : content;
 }

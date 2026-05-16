@@ -41,9 +41,12 @@ func (p *Plugin) Init(ctx sdk.PluginContext) error {
 	}
 
 	cfg := ctx.Config()
-	dsn := cfg.GetString("db_dsn")
+	dsn := cfg.GetString("plugin_dsn")
 	if dsn == "" {
-		p.logger.Warn("db_dsn not configured; playground loading in unconfigured mode")
+		dsn = cfg.GetString("db_dsn")
+	}
+	if dsn == "" {
+		p.logger.Warn("plugin_dsn/db_dsn not configured; playground loading in unconfigured mode")
 		return nil
 	}
 
@@ -61,12 +64,7 @@ func (p *Plugin) Init(ctx sdk.PluginContext) error {
 
 	storage := NewObjectStorage(p.host)
 
-	p.svc = NewService(p.logger, p.db, p.host, ServiceOptions{
-		DefaultGroupID:     cfg.GetInt("default_group_id"),
-		MaxConversations:   cfg.GetInt("max_conversations"),
-		MaxContextMessages: cfg.GetInt("max_context_messages"),
-		Storage:            storage,
-	})
+	p.svc = NewService(p.logger, p.db, p.host, storage)
 
 	return nil
 }

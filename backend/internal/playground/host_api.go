@@ -15,8 +15,6 @@ import (
 
 const (
 	hostMethodGatewayForward = "gateway.forward"
-	hostMethodPlatformsList  = "platforms.list"
-	hostMethodModelsList     = "models.list"
 	hostMethodUsersGet       = "users.get"
 	hostMethodAssetsStore    = "assets.store"
 	hostMethodAssetsGetURL   = "assets.get_url"
@@ -137,48 +135,6 @@ func hostForwardPayload(req hostForwardRequest) map[string]interface{} {
 		"body":     string(req.Body),
 		"stream":   req.Stream,
 	}
-}
-
-func hostListPlatforms(ctx context.Context, host sdk.Host) ([]map[string]interface{}, error) {
-	payload, err := hostInvoke(ctx, host, hostMethodPlatformsList, nil)
-	if err != nil {
-		return nil, err
-	}
-	items, ok := firstPayloadValue(payload, "platforms", "items", "data").([]interface{})
-	if !ok {
-		return []map[string]interface{}{}, nil
-	}
-	out := make([]map[string]interface{}, 0, len(items))
-	for _, item := range items {
-		if m, ok := mapFromAny(item); ok {
-			out = append(out, m)
-		}
-	}
-	return out, nil
-}
-
-func hostListModels(ctx context.Context, host sdk.Host, platform string) ([]sdk.ModelInfo, error) {
-	payload, err := hostInvoke(ctx, host, hostMethodModelsList, map[string]interface{}{"platform": platform})
-	if err != nil {
-		return nil, err
-	}
-	items, ok := firstPayloadValue(payload, "models", "items", "data").([]interface{})
-	if !ok {
-		return []sdk.ModelInfo{}, nil
-	}
-	out := make([]sdk.ModelInfo, 0, len(items))
-	for _, item := range items {
-		body, err := json.Marshal(item)
-		if err != nil {
-			return nil, err
-		}
-		var model sdk.ModelInfo
-		if err := json.Unmarshal(body, &model); err != nil {
-			return nil, err
-		}
-		out = append(out, model)
-	}
-	return out, nil
 }
 
 func hostGetUserInfo(ctx context.Context, host sdk.Host, userID int64) (map[string]interface{}, error) {

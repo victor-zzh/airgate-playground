@@ -36,9 +36,7 @@ func (p *Plugin) RegisterRoutes(r sdk.RouteRegistrar) {
 	r.Handle(http.MethodPost, "/messages", p.requireUser(p.handlePersistMessage))
 	r.Handle(http.MethodPost, "/chat/completions", p.requireUser(p.handleChatCompletions))
 
-	// Metadata (platforms, models, user info)
-	r.Handle(http.MethodGet, "/platforms", p.requireUser(p.handleListPlatforms))
-	r.Handle(http.MethodGet, "/models", p.requireUser(p.handleListModels))
+	// Metadata
 	r.Handle(http.MethodGet, "/user/info", p.requireUser(p.handleGetUserInfo))
 }
 
@@ -294,17 +292,8 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if status == 0 {
 			status = http.StatusOK
 		}
-		respBody := resp.Body
-		if status >= 200 && status < 300 {
-			if storedBody, err := p.storeResponseImageAssets(ctx, parseUserID(r), 0, resp.Body); err != nil {
-				logger.Warn("failed to store response image assets", "error", err)
-			} else {
-				respBody = storedBody
-				w.Header().Del("Content-Length")
-			}
-		}
 		w.WriteHeader(status)
-		_, _ = w.Write(respBody)
+		_, _ = w.Write(resp.Body)
 		return
 	}
 	headers.Set("Accept", "text/event-stream")
@@ -366,44 +355,7 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-// ── Generation Task Handlers ──
-
 // ── Metadata Handlers ──
-
-func (p *Plugin) handleListPlatforms(w http.ResponseWriter, r *http.Request) {
-	platforms, err := hostListPlatforms(r.Context(), p.host)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, platforms)
-}
-
-func (p *Plugin) handleListModels(w http.ResponseWriter, r *http.Request) {
-	platform := r.URL.Query().Get("platform")
-	if platform == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "platform query param required"})
-		return
-	}
-	models, err := hostListModels(r.Context(), p.host, platform)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if cap := r.URL.Query().Get("capability"); cap != "" {
-		filtered := make([]sdk.ModelInfo, 0, len(models))
-		for _, m := range models {
-			for _, c := range m.Capabilities {
-				if c == cap {
-					filtered = append(filtered, m)
-					break
-				}
-			}
-		}
-		models = filtered
-	}
-	writeJSON(w, http.StatusOK, models)
-}
 
 func (p *Plugin) handleGetUserInfo(w http.ResponseWriter, r *http.Request) {
 	info, err := hostGetUserInfo(r.Context(), p.host, int64(parseUserID(r)))
@@ -535,80 +487,6 @@ func imageContentTypeForObjectKey(objectKey string) string {
 		return "image/gif"
 	default:
 		return "image/png"
-	}
-}
-
-func (p *Plugin) storeResponseImageAssets(ctx context.Context, userID int, conversationID int64, body []byte) ([]byte, error) {
-	if p.svc == nil || p.svc.storage == nil || !bytes.Contains(body, []byte("base64")) && !bytes.Contains(body, []byte("data:image/")) {
-		return body, nil
-	}
-	var payload any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return body, nil
-	}
-	changed := false
-	converted, err := p.convertResponseValue(ctx, userID, conversationID, payload, &changed)
-	if err != nil {
-		return nil, err
-	}
-	if !changed {
-		return body, nil
-	}
-	return json.Marshal(converted)
-}
-
-func (p *Plugin) convertResponseValue(ctx context.Context, userID int, conversationID int64, value any, changed *bool) (any, error) {
-	switch v := value.(type) {
-	case map[string]any:
-		if encoded, ok := v["b64_json"].(string); ok && encoded != "" {
-			asset, err := p.svc.storage.StoreImageBase64(ctx, userID, conversationID, "image/png", encoded)
-			if err != nil {
-				return nil, err
-			}
-			if err := p.svc.insertAsset(ctx, userID, conversationID, asset); err != nil {
-				return nil, err
-			}
-			publicURL, err := p.svc.storage.PublicURL(ctx, asset.ObjectKey)
-			if err != nil {
-				return nil, err
-			}
-			v["url"] = publicURL
-			delete(v, "b64_json")
-			*changed = true
-		}
-		for key, item := range v {
-			converted, err := p.convertResponseValue(ctx, userID, conversationID, item, changed)
-			if err != nil {
-				return nil, err
-			}
-			v[key] = converted
-		}
-		return v, nil
-	case []any:
-		for i, item := range v {
-			converted, err := p.convertResponseValue(ctx, userID, conversationID, item, changed)
-			if err != nil {
-				return nil, err
-			}
-			v[i] = converted
-		}
-		return v, nil
-	case string:
-		converted, err := p.svc.storeContentAssets(ctx, userID, conversationID, v)
-		if err != nil {
-			return nil, err
-		}
-		if converted != v {
-			resolved, err := p.svc.resolveAssetURLs(ctx, userID, converted)
-			if err != nil {
-				return nil, err
-			}
-			*changed = true
-			return resolved, nil
-		}
-		return v, nil
-	default:
-		return v, nil
 	}
 }
 

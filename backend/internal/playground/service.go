@@ -11,46 +11,20 @@ import (
 	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 )
 
-type ServiceOptions struct {
-	DefaultGroupID     int
-	MaxConversations   int
-	MaxContextMessages int
-	Storage            *ObjectStorage
-}
-
 type Service struct {
 	logger  *slog.Logger
 	db      *sql.DB
 	host    sdk.Host
-	opts    ServiceOptions
 	storage *ObjectStorage
 }
 
-func NewService(logger *slog.Logger, db *sql.DB, host sdk.Host, opts ServiceOptions) *Service {
-	if opts.DefaultGroupID <= 0 {
-		opts.DefaultGroupID = 1
-	}
-	if opts.MaxContextMessages <= 0 {
-		opts.MaxContextMessages = 50
-	}
-	return &Service{logger: logger, db: db, host: host, opts: opts, storage: opts.Storage}
+func NewService(logger *slog.Logger, db *sql.DB, host sdk.Host, storage *ObjectStorage) *Service {
+	return &Service{logger: logger, db: db, host: host, storage: storage}
 }
 
 // ── Conversation CRUD ──
 
 func (s *Service) CreateConversation(ctx context.Context, userID int, title string, groupID int64, platform, model string) (*Conversation, error) {
-	if s.opts.MaxConversations > 0 {
-		var count int
-		if err := s.db.QueryRowContext(ctx,
-			"SELECT COUNT(*) FROM playground_conversations WHERE user_id = $1", userID,
-		).Scan(&count); err != nil {
-			return nil, fmt.Errorf("count conversations: %w", err)
-		}
-		if count >= s.opts.MaxConversations {
-			return nil, fmt.Errorf("maximum conversations (%d) reached", s.opts.MaxConversations)
-		}
-	}
-
 	conv := &Conversation{UserID: userID, Title: title, GroupID: groupID, Platform: platform, Model: model}
 	err := s.db.QueryRowContext(ctx,
 		`INSERT INTO playground_conversations (user_id, title, group_id, platform, model)

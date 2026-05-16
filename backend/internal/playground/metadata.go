@@ -17,8 +17,6 @@ func BuildPluginInfo() sdk.PluginInfo {
 		Type:        sdk.PluginTypeExtension,
 		Capabilities: []sdk.Capability{
 			sdk.CapabilityForHostMethod(hostMethodGatewayForward),
-			sdk.CapabilityForHostMethod(hostMethodPlatformsList),
-			sdk.CapabilityForHostMethod(hostMethodModelsList),
 			sdk.CapabilityForHostMethod(hostMethodUsersGet),
 			sdk.CapabilityForHostMethod(hostMethodAssetsStore),
 			sdk.CapabilityForHostMethod(hostMethodAssetsGetURL),
@@ -31,29 +29,6 @@ func BuildPluginInfo() sdk.PluginInfo {
 				Icon:        "message-square",
 				Description: "AI chat playground",
 				Audience:    "all",
-			},
-		},
-		ConfigSchema: []sdk.ConfigField{
-			{
-				Key:         "default_group_id",
-				Label:       "Default Group ID",
-				Type:        "int",
-				Description: "Default channel group for new conversations",
-				Default:     "1",
-			},
-			{
-				Key:         "max_conversations",
-				Label:       "Max Conversations Per User",
-				Type:        "int",
-				Description: "Maximum number of conversations per user (0 = unlimited)",
-				Default:     "100",
-			},
-			{
-				Key:         "max_context_messages",
-				Label:       "Max Context Messages",
-				Type:        "int",
-				Description: "Maximum number of history messages sent as context",
-				Default:     "50",
 			},
 		},
 	}
