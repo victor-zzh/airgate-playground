@@ -1,4 +1,4 @@
-GO := GOTOOLCHAIN=local GOPRIVATE=github.com/DouDOU-start/airgate-sdk GONOPROXY=github.com/DouDOU-start/airgate-sdk go
+GO := GOTOOLCHAIN=local go
 
 .PHONY: help install build build-web webdist build-backend release ci pre-commit lint fmt test vet setup-hooks clean
 
