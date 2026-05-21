@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"strconv"
 	"strings"
+	"time"
 
 	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 )
@@ -86,7 +88,7 @@ func (p *Plugin) Init(ctx sdk.PluginContext) error {
 
 	storage := NewObjectStorage(p.host)
 
-	p.svc = NewService(p.logger, p.db, p.host, storage)
+	p.svc = NewService(p.logger, p.db, p.host, storage, resolveMaxConversationsPerUser(cfg))
 
 	return nil
 }
@@ -111,9 +113,44 @@ func (p *Plugin) Migrate() error {
 }
 
 func (p *Plugin) BackgroundTasks() []sdk.BackgroundTask {
-	return nil
+	if p.svc == nil {
+		return nil
+	}
+	return []sdk.BackgroundTask{
+		{
+			Name:     "cleanup_orphan_assets",
+			Interval: time.Hour,
+			Handler: func(ctx context.Context) error {
+				deleted, err := p.svc.CleanupOrphanAssets(ctx, 200)
+				if err != nil {
+					p.logger.Warn("孤儿资产清理失败", "deleted", deleted, "error", err)
+					return err
+				}
+				if deleted > 0 {
+					p.logger.Info("孤儿资产清理完成", "deleted", deleted)
+				}
+				return nil
+			},
+		},
+	}
 }
 
 func (p *Plugin) Configured() bool {
 	return p.svc != nil
+}
+
+func resolveMaxConversationsPerUser(cfg sdk.PluginConfig) int {
+	const defaultMaxConversationsPerUser = 10
+	if cfg == nil {
+		return defaultMaxConversationsPerUser
+	}
+	raw := strings.TrimSpace(cfg.GetString("max_conversations_per_user"))
+	if raw == "" {
+		return defaultMaxConversationsPerUser
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return defaultMaxConversationsPerUser
+	}
+	return value
 }

@@ -498,9 +498,14 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     void (async () => {
       if (!canSendMessage || !activeId) return;
       pendingRefocusRef.current = true;
-      const content = messageContentWithImages(input, pendingImages);
+      const draftInput = input;
+      const draftPendingImages = pendingImages;
+      const previousMessages = messages;
+      const content = messageContentWithImages(draftInput, draftPendingImages);
       const groupID = resolveGroupID();
       let conversationID = activeId;
+      let conversationCreated = false;
+      let userMessagePersisted = false;
       const localUserMessage: Message = {
         id: Date.now(),
         conversation_id: activeId,
@@ -533,6 +538,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
             platform: selectedPlatform,
             model: selectedModelID,
           });
+          conversationCreated = true;
           conversationID = conv.id;
           if (activeIdRef.current === DRAFT_CONVERSATION_ID) {
             skipNextMessagesLoadRef.current = conv.id;
@@ -541,6 +547,11 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
           }
           setConversations(prev => [conv, ...prev.filter(item => item.id !== DRAFT_CONVERSATION_ID)]);
         }
+
+        setInput('');
+        setPendingImages([]);
+        if (inputRef.current) inputRef.current.style.height = '24px';
+        if (fileInputRef.current) fileInputRef.current.value = '';
 
         await api.persistMessage({
           conversation_id: conversationID,
@@ -551,6 +562,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
           model: selectedModelID,
           group_id: groupID,
         });
+        userMessagePersisted = true;
 
         await streamAssistantResponse({
           conversationID,
@@ -563,6 +575,21 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
           titleContent: content,
         });
       } catch (err) {
+        if (!userMessagePersisted) {
+          setInput(draftInput);
+          setPendingImages(draftPendingImages);
+          if (inputRef.current) {
+            inputRef.current.style.height = '24px';
+            inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 220)}px`;
+          }
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          setMessages(previousMessages);
+          if (conversationCreated && activeIdRef.current === conversationID) {
+            setConversations(prev => prev.map(item =>
+              item.id === conversationID ? { ...item, updated_at: new Date().toISOString() } : item,
+            ));
+          }
+        }
         if (activeIdRef.current === conversationID || activeIdRef.current === DRAFT_CONVERSATION_ID) {
           setError(err instanceof Error ? err.message : 'stream failed');
         }

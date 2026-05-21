@@ -84,11 +84,7 @@ func (s *ObjectStorage) StoreImageBase64(ctx context.Context, userID int, conver
 }
 
 func (s *ObjectStorage) StoreImageBytes(ctx context.Context, userID int, conversationID int64, contentType string, data []byte) (*StoredAsset, error) {
-	scope := "playground/scratch"
-	if conversationID > 0 {
-		scope = fmt.Sprintf("playground/conversation-%d", conversationID)
-	}
-	asset, err := hostStoreAsset(ctx, s.host, int64(userID), scope, contentType, extensionForContentType(contentType), data)
+	asset, err := hostStoreAsset(ctx, s.host, int64(userID), "chat", contentType, extensionForContentType(contentType), data)
 	if err != nil {
 		return nil, err
 	}
@@ -107,4 +103,8 @@ func (s *ObjectStorage) PublicURL(ctx context.Context, objectKey string) (string
 
 func (s *ObjectStorage) GetBytes(ctx context.Context, objectKey string) (*hostAssetBytes, error) {
 	return hostGetAssetBytes(ctx, s.host, objectKey)
+}
+
+func (s *ObjectStorage) Delete(ctx context.Context, objectKey string) error {
+	return hostDeleteAsset(ctx, s.host, objectKey)
 }
