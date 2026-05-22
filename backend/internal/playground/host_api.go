@@ -19,6 +19,7 @@ const (
 	hostMethodAssetsStore    = "assets.store"
 	hostMethodAssetsGetURL   = "assets.get_url"
 	hostMethodAssetsGetBytes = "assets.get_bytes"
+	hostMethodAssetsDelete   = "assets.delete"
 )
 
 type hostForwardRequest struct {
@@ -141,10 +142,10 @@ func hostGetUserInfo(ctx context.Context, host sdk.Host, userID int64) (map[stri
 	return hostInvoke(ctx, host, hostMethodUsersGet, map[string]interface{}{"user_id": userID})
 }
 
-func hostStoreAsset(ctx context.Context, host sdk.Host, userID int64, scope, contentType, fileExtension string, data []byte) (*StoredAsset, error) {
+func hostStoreAsset(ctx context.Context, host sdk.Host, userID int64, purpose, contentType, fileExtension string, data []byte) (*StoredAsset, error) {
 	payload, err := hostInvoke(ctx, host, hostMethodAssetsStore, map[string]interface{}{
 		"user_id":        userID,
-		"scope":          scope,
+		"purpose":        purpose,
 		"content_type":   contentType,
 		"file_extension": fileExtension,
 		"data":           data,
@@ -178,6 +179,11 @@ func hostGetAssetBytes(ctx context.Context, host sdk.Host, objectKey string) (*h
 		Data:        bytesFromPayload(firstPayloadValue(payload, "data")),
 		ContentType: stringFromAny(firstPayloadValue(payload, "content_type")),
 	}, nil
+}
+
+func hostDeleteAsset(ctx context.Context, host sdk.Host, objectKey string) error {
+	_, err := hostInvoke(ctx, host, hostMethodAssetsDelete, map[string]interface{}{"object_key": objectKey})
+	return err
 }
 
 func firstPayloadValue(payload map[string]interface{}, keys ...string) interface{} {
