@@ -50,16 +50,14 @@ export const keyframes = `
   position: relative;
 }
 .pg-conv-item:hover,
-.pg-sidebar-action:hover,
-.pg-sidebar-link:hover {
+.pg-sidebar-action:hover {
   background: var(--ag-bg-hover, rgba(148, 163, 184, 0.12)) !important;
   color: var(--ag-text, #111827) !important;
 }
 .pg-conv-item.is-active {
   background: var(--ag-bg-hover, rgba(148, 163, 184, 0.12)) !important;
 }
-.pg-sidebar-action:focus-visible,
-.pg-sidebar-link:focus-visible {
+.pg-sidebar-action:focus-visible {
   outline: 2px solid var(--ag-border-focus, #3b82f6);
   outline-offset: 2px;
 }
@@ -69,34 +67,6 @@ export const keyframes = `
 .pg-sidebar-collapse-button:hover {
   background: var(--ag-bg-hover, rgba(148, 163, 184, 0.12)) !important;
   color: var(--ag-text, #111827) !important;
-}
-.pg-topbar-button:hover {
-  background: var(--ag-bg-hover, rgba(148, 163, 184, 0.12)) !important;
-  color: var(--ag-text, #111827) !important;
-}
-.pg-topbar-button:focus-visible {
-  outline: 2px solid var(--ag-border-focus, #3b82f6);
-  outline-offset: 2px;
-}
-.pg-topbar-logout:hover {
-  background: var(--ag-danger-subtle, rgba(239, 68, 68, 0.12)) !important;
-  color: var(--ag-danger, #ef4444) !important;
-}
-.pg-topbar {
-  background: color-mix(in oklab, var(--ag-bg, #f8fafc) 78%, transparent) !important;
-}
-[data-theme="dark"] .pg-topbar,
-.dark .pg-topbar {
-  background: color-mix(in oklab, var(--ag-bg, #0f172a) 82%, transparent) !important;
-  border-bottom-color: color-mix(in oklab, var(--ag-border, rgba(148, 163, 184, 0.18)) 34%, transparent) !important;
-  box-shadow:
-    0 1px 0 color-mix(in oklab, white 4%, transparent) inset,
-    0 4px 16px color-mix(in oklab, black 10%, transparent) !important;
-}
-@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  .pg-topbar {
-    background: color-mix(in oklab, var(--ag-bg-surface, #ffffff) 92%, transparent) !important;
-  }
 }
 .pg-input-wrapper:focus-within {
   border-color: color-mix(in oklab, var(--ag-primary, #2dd4bf) 35%, transparent) !important;
@@ -116,12 +86,6 @@ export const keyframes = `
 .pg-composer-select option {
   background: var(--ag-bg-surface, #ffffff);
   color: var(--ag-text, #111827);
-}
-@media (max-width: 720px) {
-  .pg-topbar-user-text,
-  .pg-topbar-lang-text {
-    display: none !important;
-  }
 }
 `;
 
@@ -192,7 +156,7 @@ export const styles: Record<string, CSSProperties> = {
     flexDirection: 'column',
     alignItems: 'stretch',
     gap: 2,
-    padding: '0 12px 10px',
+    padding: '8px 12px 10px',
   },
   sidebarTopbar: {
     display: 'flex',
@@ -200,57 +164,16 @@ export const styles: Record<string, CSSProperties> = {
     justifyContent: 'space-between',
     gap: 8,
     minWidth: 0,
-    height: 48,
-  },
-  breadcrumbs: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    minWidth: 0,
-    gap: 7,
-  },
-  breadcrumbItem: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 7,
-    minWidth: 0,
-  },
-  breadcrumbLink: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    minWidth: 0,
-    padding: '4px 10px',
-    borderRadius: 8,
-    color: cssVar('textTertiary'),
-    fontFamily: cssVar('fontSans'),
-    fontSize: 15,
-    fontWeight: 400,
-    letterSpacing: 0,
-    textDecoration: 'none',
-    transition: cssVar('transition'),
-  },
-  breadcrumbCurrent: {
-    color: cssVar('text'),
-    fontFamily: cssVar('fontSans'),
-    fontSize: 15,
-    fontWeight: 400,
-    letterSpacing: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  breadcrumbSeparator: {
-    color: cssVar('textTertiary'),
-    flexShrink: 0,
-    fontSize: 15,
-    opacity: 0.45,
+    height: 40,
   },
   newBtn: {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'flex-start',
-    width: '100%',
+    flex: 1,
+    width: 'auto',
     minWidth: 0,
-    minHeight: 36,
+    minHeight: 40,
     gap: 12,
     padding: '0 10px',
     border: 'none',
@@ -369,129 +292,6 @@ export const styles: Record<string, CSSProperties> = {
     minWidth: 0,
     overflow: 'hidden',
   },
-  topbar: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 20,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    height: 48,
-    gap: 12,
-    padding: '0 16px',
-    borderBottom: `1px solid color-mix(in oklab, ${cssVar('border')} 28%, transparent)`,
-    boxShadow: `0 1px 0 color-mix(in oklab, white 16%, transparent) inset, 0 4px 16px color-mix(in oklab, ${cssVar('bg')} 10%, transparent)`,
-    backdropFilter: 'saturate(160%) blur(16px)',
-    WebkitBackdropFilter: 'saturate(160%) blur(16px)',
-    pointerEvents: 'auto',
-  },
-  topbarLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    minWidth: 0,
-  },
-  topbarRight: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    flexShrink: 0,
-  },
-  topbarTextBtn: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    height: 40,
-    padding: '0 12px',
-    border: 'none',
-    borderRadius: cssVar('radiusSm'),
-    background: 'transparent',
-    color: cssVar('textSecondary'),
-    cursor: 'pointer',
-    transition: cssVar('transition'),
-    fontFamily: cssVar('fontSans'),
-    fontSize: 12,
-    fontWeight: 500,
-  },
-  topbarLangText: {
-    width: 32,
-    textAlign: 'center' as const,
-    fontFamily: cssVar('fontMono'),
-    fontSize: 12,
-    textTransform: 'uppercase',
-  },
-  topbarIconBtn: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 40,
-    minWidth: 40,
-    height: 40,
-    border: 'none',
-    borderRadius: cssVar('radiusSm'),
-    background: 'transparent',
-    color: cssVar('textSecondary'),
-    cursor: 'pointer',
-    transition: cssVar('transition'),
-  },
-  topbarLogoutBtn: {
-    color: cssVar('textSecondary'),
-  },
-  topbarDivider: {
-    width: 1,
-    height: 24,
-    margin: '0 4px',
-    background: cssVar('border'),
-    flexShrink: 0,
-  },
-  topbarUser: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    minWidth: 0,
-  },
-  topbarUserText: {
-    display: 'block',
-    minWidth: 0,
-    textAlign: 'right' as const,
-  },
-  topbarUserName: {
-    color: cssVar('text'),
-    fontSize: 14,
-    fontWeight: 500,
-    lineHeight: 1.2,
-    maxWidth: 140,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  topbarUserEmail: {
-    color: cssVar('textTertiary'),
-    fontSize: 12,
-    lineHeight: 1.2,
-    maxWidth: 160,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  topbarAvatar: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 36,
-    height: 36,
-    borderRadius: cssVar('radiusSm'),
-    color: cssVar('primary'),
-    fontSize: 14,
-    fontWeight: 700,
-    flexShrink: 0,
-  },
-  topbarAdminAvatar: {
-    fontWeight: 500,
-  },
   toggleBtn: {
     display: 'flex',
     alignItems: 'center',
@@ -560,7 +360,7 @@ export const styles: Record<string, CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     position: 'relative',
-    paddingTop: 48,
+    paddingTop: 0,
   },
 
   // ── Empty state ──
