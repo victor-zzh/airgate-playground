@@ -17,7 +17,7 @@ export function InputArea() {
     inputRef,
     fileInputRef,
     handleImageChange,
-    renderCustomSelect,
+    renderNativeSelect,
     selectedModel,
     modelOptions,
     setSelectedModel,
@@ -93,7 +93,7 @@ export function InputArea() {
 
         <div style={{ ...styles.inputActions, ...(isMobile ? styles.inputActionsMobile : null) }}>
           <div style={{ ...styles.selectors, ...(isMobile ? styles.selectorsMobile : null) }}>
-            {renderCustomSelect({
+            {renderNativeSelect({
               id: 'model',
               value: selectedModel,
               options: modelOptions,
@@ -101,7 +101,7 @@ export function InputArea() {
               ariaLabel: t('playground.model'),
             })}
 
-            {selectedModelSupportsReasoning && renderCustomSelect({
+            {selectedModelSupportsReasoning && renderNativeSelect({
               id: 'reasoning-effort',
               value: reasoningEffort,
               options: [

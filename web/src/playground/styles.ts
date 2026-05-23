@@ -75,17 +75,23 @@ export const keyframes = `
     0 2px 12px rgba(0, 0, 0, 0.08),
     0 0 0 1px color-mix(in oklab, var(--ag-primary, #2dd4bf) 12%, transparent) !important;
 }
+.pg-composer-select {
+  color-scheme: light;
+}
+[data-theme="dark"] .pg-composer-select,
+.dark .pg-composer-select {
+  color-scheme: dark;
+}
 .pg-composer-select:hover {
   border-color: var(--ag-border, rgba(148, 163, 184, 0.26)) !important;
   color: var(--ag-text, #111827) !important;
 }
+.pg-composer-select:focus {
+  outline: none;
+}
 .pg-composer-select:focus-visible {
   border-color: color-mix(in oklab, var(--ag-primary, #2dd4bf) 38%, transparent) !important;
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ag-primary, #2dd4bf) 14%, transparent);
-}
-.pg-composer-select option {
-  background: var(--ag-bg-surface, #ffffff);
-  color: var(--ag-text, #111827);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ag-primary, #2dd4bf) 22%, transparent);
 }
 `;
 
@@ -328,23 +334,20 @@ export const styles: Record<string, CSSProperties> = {
     width: 'auto',
     maxWidth: '100%',
     height: 28,
-    padding: '0 28px 0 10px',
+    padding: '0 8px',
     border: `1px solid ${cssVar('borderSubtle')}`,
     borderRadius: 7,
     backgroundColor: cssVar('bgHover'),
-    backgroundImage: 'linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%)',
-    backgroundPosition: 'calc(100% - 13px) 50%, calc(100% - 8px) 50%',
-    backgroundRepeat: 'no-repeat',
-    backgroundSize: '5px 5px, 5px 5px',
+    backgroundClip: 'padding-box',
     color: cssVar('textSecondary'),
-    fontFamily: cssVar('fontMono'),
-    fontSize: 11,
+    fontFamily: 'inherit',
+    fontSize: 12,
     fontWeight: 600,
-    lineHeight: '26px',
+    lineHeight: 'normal',
     outline: 'none',
-    appearance: 'none',
-    WebkitAppearance: 'none',
-    MozAppearance: 'none',
+    appearance: 'auto',
+    WebkitAppearance: 'menulist',
+    MozAppearance: 'auto',
     cursor: 'pointer',
     transition: cssVar('transition'),
     overflow: 'hidden',

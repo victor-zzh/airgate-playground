@@ -124,7 +124,7 @@ export interface PlaygroundContextValue {
   handleImageChange: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   handlePaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void;
   handleKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  renderCustomSelect: (props: {
+  renderNativeSelect: (props: {
     id: string;
     value: string;
     options: SelectOption[];
@@ -711,7 +711,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const renderCustomSelect = useCallback(({
+  const renderNativeSelect = useCallback(({
     id,
     value,
     options,
@@ -809,7 +809,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     handleImageChange,
     handlePaste,
     handleKeyDown,
-    renderCustomSelect,
+    renderNativeSelect,
     interactiveMessageOptions,
   };
 
