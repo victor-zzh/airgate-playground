@@ -1,6 +1,5 @@
-import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { cssVar, getStoredTheme, setTheme, type ThemeName } from '@doudou-start/airgate-theme';
+import { cssVar } from '@doudou-start/airgate-theme';
 import { PlaygroundProvider, usePlayground } from './playground/PlaygroundContext';
 import { ChatView } from './playground/ChatView';
 import { styles, keyframes } from './playground/styles';
@@ -43,7 +42,7 @@ function Breadcrumbs({ items }: { items: BreadcrumbItem[] }) {
 }
 
 function ChatShell() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const {
     isMobile,
     sidebarOpen,
@@ -55,38 +54,6 @@ function ChatShell() {
     openConversation,
     deleteConversation,
   } = usePlayground();
-  const [theme, setThemeState] = useState<ThemeName>(() => getStoredTheme());
-
-  const toggleLanguage = () => {
-    const nextLang = i18n.language === 'zh' ? 'en' : 'zh';
-    void i18n.changeLanguage(nextLang);
-    try {
-      window.localStorage.setItem('lang', nextLang);
-    } catch {
-      // Language switching should keep working when storage is unavailable.
-    }
-  };
-
-  const toggleTheme = () => {
-    const next: ThemeName = theme === 'dark' ? 'light' : 'dark';
-    setTheme(next);
-    document.documentElement.classList.toggle('light', next === 'light');
-    document.documentElement.classList.toggle('dark', next === 'dark');
-    setThemeState(next);
-  };
-
-  const logout = () => {
-    try {
-      window.localStorage.removeItem('token');
-      window.sessionStorage.removeItem('apikey_session_secret');
-    } catch {
-      // Logout should still redirect when storage is unavailable.
-    }
-    window.location.href = '/login';
-  };
-
-  const displayName = userInfo?.username || userInfo?.email?.split('@')[0] || 'User';
-  const isAdmin = userInfo?.role === 'admin';
 
   return (
     <div data-full-bleed data-pg-aesthetic style={styles.layout}>
@@ -189,73 +156,6 @@ function ChatShell() {
       )}
 
       <div style={styles.main}>
-        <header style={styles.topbar} className="pg-topbar">
-          <div style={styles.topbarLeft} />
-          <div style={styles.topbarRight}>
-            <button
-              type="button"
-              style={styles.topbarTextBtn}
-              className="pg-topbar-button"
-              onClick={toggleLanguage}
-              aria-label={i18n.language === 'zh' ? 'Switch to English' : '切换为中文'}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="m5 8 6 6" /><path d="m4 14 6-6 2-3" /><path d="M2 5h12" /><path d="M7 2h1" /><path d="m22 22-5-10-5 10" /><path d="M14 18h6" />
-              </svg>
-              <span style={styles.topbarLangText} className="pg-topbar-lang-text">{i18n.language === 'zh' ? 'EN' : '中文'}</span>
-            </button>
-            <button
-              type="button"
-              style={styles.topbarIconBtn}
-              className="pg-topbar-button"
-              onClick={toggleTheme}
-              aria-label={theme === 'dark' ? '切换亮色模式' : '切换暗色模式'}
-            >
-              {theme === 'dark' ? (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.41" />
-                </svg>
-              ) : (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
-                </svg>
-              )}
-            </button>
-            {userInfo && (
-              <>
-                <div style={styles.topbarDivider} />
-                <div style={styles.topbarUser}>
-                  <div style={styles.topbarUserText} className="pg-topbar-user-text">
-                    <div style={styles.topbarUserName}>{displayName}</div>
-                    <div style={styles.topbarUserEmail}>{userInfo.email}</div>
-                  </div>
-                  <div style={{ ...styles.topbarAvatar, ...(isAdmin ? styles.topbarAdminAvatar : null) }}>
-                    {isAdmin ? (
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.68-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
-                        <path d="m9 12 2 2 4-4" />
-                      </svg>
-                    ) : (
-                      displayName.charAt(0).toUpperCase()
-                    )}
-                  </div>
-                </div>
-              </>
-            )}
-            <div style={styles.topbarDivider} />
-            <button
-              type="button"
-              style={{ ...styles.topbarIconBtn, ...styles.topbarLogoutBtn }}
-              className="pg-topbar-button pg-topbar-logout"
-              onClick={logout}
-              aria-label={t('common.logout', { defaultValue: '退出登录' })}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5" /><path d="M21 12H9" />
-              </svg>
-            </button>
-          </div>
-        </header>
         <ChatView />
       </div>
 
