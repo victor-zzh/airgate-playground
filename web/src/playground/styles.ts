@@ -47,6 +47,43 @@ export const keyframes = `
 .pg-conv-item {
   position: relative;
 }
+.pg-conv-item:hover,
+.pg-sidebar-action:hover,
+.pg-sidebar-link:hover {
+  background: var(--ag-color-bgHover, rgba(148, 163, 184, 0.12)) !important;
+  color: var(--ag-color-text, #111827) !important;
+}
+.pg-conv-item.is-active {
+  background: var(--ag-color-bgHover, rgba(148, 163, 184, 0.12)) !important;
+}
+.pg-sidebar-action:focus-visible,
+.pg-sidebar-link:focus-visible {
+  outline: 2px solid var(--ag-color-borderFocus, #3b82f6);
+  outline-offset: 2px;
+}
+.pg-sidebar-collapse-button svg {
+  stroke-width: 2.5;
+}
+.pg-sidebar-collapse-button:hover {
+  background: var(--ag-color-bgHover, rgba(148, 163, 184, 0.12)) !important;
+  color: var(--ag-color-text, #111827) !important;
+}
+.pg-topbar {
+  background: color-mix(in oklab, var(--ag-color-bgDeep, #020617) 78%, transparent) !important;
+}
+[data-theme="dark"] .pg-topbar,
+.dark .pg-topbar {
+  background: color-mix(in oklab, var(--ag-color-bgDeep, #020617) 82%, transparent) !important;
+  border-bottom-color: color-mix(in oklab, var(--ag-color-borderSubtle, rgba(148, 163, 184, 0.18)) 34%, transparent) !important;
+  box-shadow:
+    0 1px 0 color-mix(in oklab, white 4%, transparent) inset,
+    0 4px 16px color-mix(in oklab, black 10%, transparent) !important;
+}
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .pg-topbar {
+    background: color-mix(in oklab, var(--ag-color-bg, #0f172a) 92%, transparent) !important;
+  }
+}
 `;
 
 export const styles: Record<string, CSSProperties> = {
@@ -64,15 +101,17 @@ export const styles: Record<string, CSSProperties> = {
   },
   // ── Sidebar ──
   sidebar: {
-    width: 280,
-    minWidth: 280,
+    width: 284,
+    minWidth: 284,
     display: 'flex',
     flexDirection: 'column',
     minHeight: 0,
-    background: cssVar('bg'),
+    background: cssVar('bgDeep'),
     borderRight: `1px solid ${cssVar('borderSubtle')}`,
     position: 'relative',
     zIndex: 3,
+    fontSynthesis: 'none',
+    textRendering: 'geometricPrecision',
   },
   sidebarRail: {
     width: 48,
@@ -80,8 +119,8 @@ export const styles: Record<string, CSSProperties> = {
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'flex-start',
-    paddingTop: 12,
-    background: cssVar('bg'),
+    paddingTop: 4,
+    background: cssVar('bgDeep'),
     borderRight: `1px solid ${cssVar('borderSubtle')}`,
     flexShrink: 0,
     zIndex: 3,
@@ -111,60 +150,123 @@ export const styles: Record<string, CSSProperties> = {
   },
   sidebarHeader: {
     display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 8,
-    padding: '20px 12px 14px 8px',
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 0,
+    padding: '60px 0 10px',
   },
-  sidebarTitleGroup: {
-    display: 'flex',
+  breadcrumbs: {
+    display: 'inline-flex',
     alignItems: 'center',
-    gap: 8,
+    minWidth: 0,
+    gap: 6,
+  },
+  breadcrumbItem: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
     minWidth: 0,
   },
-  sidebarTitle: {
-    fontSize: 13,
-    fontWeight: 500,
-    color: cssVar('text'),
-    letterSpacing: '-0.005em',
+  breadcrumbLink: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    minWidth: 0,
+    padding: '3px 4px',
+    borderRadius: 6,
+    color: cssVar('textTertiary'),
+    fontFamily: cssVar('fontMono'),
+    fontSize: 11,
+    fontWeight: 600,
+    letterSpacing: '0.02em',
+    textDecoration: 'none',
+    textTransform: 'uppercase',
+    transition: cssVar('transition'),
+  },
+  breadcrumbCurrent: {
+    color: cssVar('textTertiary'),
+    fontFamily: cssVar('fontMono'),
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '0.04em',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    textTransform: 'uppercase',
+    whiteSpace: 'nowrap',
+  },
+  breadcrumbSeparator: {
+    color: cssVar('textTertiary'),
+    flexShrink: 0,
+    fontSize: 11,
+    opacity: 0.45,
   },
   newBtn: {
-    display: 'flex',
+    display: 'inline-flex',
     alignItems: 'center',
-    justifyContent: 'center',
-    width: 28,
-    height: 28,
+    justifyContent: 'flex-start',
+    width: 'calc(100% - 24px)',
+    minHeight: 36,
+    gap: 12,
+    margin: '0 12px',
+    padding: '0 10px',
     border: 'none',
     borderRadius: 8,
     background: 'transparent',
-    color: cssVar('textSecondary'),
+    color: cssVar('text'),
     cursor: 'pointer',
     transition: cssVar('transition'),
     flexShrink: 0,
+    fontFamily: cssVar('fontSans'),
+    fontSize: 15,
+    fontWeight: 400,
+    lineHeight: '20px',
+    letterSpacing: 0,
+  },
+  sidebarSectionLabel: {
+    padding: '6px 22px 7px',
+    color: cssVar('textTertiary'),
+    fontSize: 10,
+    fontWeight: 500,
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase',
   },
   convList: {
     flex: 1,
     overflowY: 'auto',
-    padding: '2px 8px 8px',
+    padding: '0 12px 12px',
   },
   convItem: {
     display: 'flex',
     alignItems: 'center',
-    gap: 8,
-    padding: '8px 10px',
+    gap: 12,
+    minHeight: 36,
+    padding: '7px 10px',
     borderRadius: 8,
     cursor: 'pointer',
     transition: cssVar('transition'),
-    marginBottom: 1,
+    marginBottom: 4,
+    color: cssVar('text'),
+  },
+  convItemActive: {
+    background: cssVar('bgHover'),
+    fontWeight: 500,
+  },
+  convIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 20,
+    height: 20,
+    flexShrink: 0,
+    transition: cssVar('transition'),
   },
   convTitle: {
     flex: 1,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    fontSize: 13,
-    lineHeight: '18px',
-    letterSpacing: '-0.003em',
+    fontSize: 15,
+    lineHeight: '20px',
+    letterSpacing: 0,
   },
   deleteBtn: {
     width: 22,
@@ -194,16 +296,19 @@ export const styles: Record<string, CSSProperties> = {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'baseline',
-    padding: '14px 16px 18px',
+    gap: 12,
+    margin: '8px 12px 12px',
+    padding: '12px 10px 0',
+    borderTop: `1px solid ${cssVar('borderSubtle')}`,
   },
   balanceLabel: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: 500,
     color: cssVar('textTertiary'),
     letterSpacing: '0.02em',
   },
   balanceValue: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: 500,
     color: cssVar('text'),
     fontVariantNumeric: 'tabular-nums',
@@ -219,13 +324,44 @@ export const styles: Record<string, CSSProperties> = {
     minWidth: 0,
     overflow: 'hidden',
   },
+  topbar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 20,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    height: 48,
+    gap: 12,
+    padding: '0 16px',
+    borderBottom: `1px solid color-mix(in oklab, ${cssVar('borderSubtle')} 28%, transparent)`,
+    boxShadow: `0 1px 0 color-mix(in oklab, white 16%, transparent) inset, 0 4px 16px color-mix(in oklab, ${cssVar('bgDeep')} 10%, transparent)`,
+    backdropFilter: 'saturate(160%) blur(16px)',
+    WebkitBackdropFilter: 'saturate(160%) blur(16px)',
+    pointerEvents: 'auto',
+  },
+  topbarLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    minWidth: 0,
+  },
+  topbarRight: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+  },
 
   toggleBtn: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 32,
-    height: 32,
+    width: 40,
+    minWidth: 40,
+    height: 40,
     border: 'none',
     borderRadius: cssVar('radiusSm'),
     background: 'transparent',
@@ -275,6 +411,7 @@ export const styles: Record<string, CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     position: 'relative',
+    paddingTop: 48,
   },
 
   // ── Empty state ──

@@ -14,6 +14,33 @@ export function ChatPage() {
 
 export default ChatPage;
 
+type BreadcrumbItem = {
+  href?: string;
+  label: string;
+};
+
+function Breadcrumbs({ items }: { items: BreadcrumbItem[] }) {
+  return (
+    <nav aria-label="Breadcrumbs" style={styles.breadcrumbs}>
+      {items.map((item, index) => {
+        const isLast = index === items.length - 1;
+        return (
+          <span key={`${index}-${item.label}`} style={styles.breadcrumbItem}>
+            {item.href && !isLast ? (
+              <a href={item.href} style={styles.breadcrumbLink} className="pg-sidebar-link">
+                {item.label}
+              </a>
+            ) : (
+              <span style={styles.breadcrumbCurrent}>{item.label}</span>
+            )}
+            {!isLast && <span aria-hidden="true" style={styles.breadcrumbSeparator}>/</span>}
+          </span>
+        );
+      })}
+    </nav>
+  );
+}
+
 function ChatShell() {
   const { t } = useTranslation();
   const {
@@ -39,16 +66,9 @@ function ChatShell() {
       {sidebarOpen ? (
         <div style={{ ...styles.sidebar, ...(isMobile ? styles.sidebarMobile : null) }}>
           <div style={styles.sidebarHeader}>
-            <div style={styles.sidebarTitleGroup}>
-              <button style={styles.toggleBtn} onClick={() => setSidebarOpen(false)} aria-label="Collapse conversations">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                  <path d="M6 2v12" /><path d="M2 2h12v12H2z" /><path d="M10 6l-2 2 2 2" />
-                </svg>
-              </button>
-              <span style={styles.sidebarTitle}>{t('playground.conversations')}</span>
-            </div>
             <button
               style={styles.newBtn}
+              className="pg-sidebar-action"
               onClick={createConversation}
               title={t('playground.new_conversation')}
               aria-label={t('playground.new_conversation')}
@@ -56,9 +76,11 @@ function ChatShell() {
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
                 <path d="M7 1v12M1 7h12" />
               </svg>
+              <span>{t('playground.new_conversation')}</span>
             </button>
           </div>
 
+          <div style={styles.sidebarSectionLabel}>{t('playground.conversations')}</div>
           <div style={styles.convList}>
             {sidebarConversations.map(conversation => {
               const isActive = conversation.id === activeId;
@@ -66,9 +88,14 @@ function ChatShell() {
                 <div
                   key={conversation.id}
                   className={`pg-conv-item${isActive ? ' is-active' : ''}`}
-                  style={{ ...styles.convItem, background: isActive ? cssVar('bgHover') : 'transparent' }}
+                  style={{ ...styles.convItem, ...(isActive ? styles.convItemActive : null) }}
                   onClick={() => openConversation(conversation.id)}
                 >
+                  <span style={{ ...styles.convIcon, color: isActive ? cssVar('text') : cssVar('textTertiary') }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+                    </svg>
+                  </span>
                   <span style={{ ...styles.convTitle, color: isActive ? cssVar('text') : cssVar('textSecondary'), fontWeight: isActive ? 500 : 400 }}>
                     {conversation.title || t('playground.new_conversation')}
                   </span>
@@ -101,15 +128,36 @@ function ChatShell() {
         </div>
       ) : (
         <div style={{ ...styles.sidebarRail, ...(isMobile ? styles.sidebarRailMobile : null) }}>
-          <button style={styles.toggleBtn} onClick={() => setSidebarOpen(true)} aria-label="Expand conversations">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <path d="M6 2v12" /><path d="M2 2h12v12H2z" /><path d="M8 6l2 2-2 2" />
+          <button style={styles.toggleBtn} className="pg-sidebar-collapse-button" onClick={() => setSidebarOpen(true)} aria-label="Expand conversations">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 18l6-6-6-6" />
             </svg>
           </button>
         </div>
       )}
 
       <div style={styles.main}>
+        <header style={styles.topbar} className="pg-topbar">
+          <div style={styles.topbarLeft}>
+            <button
+              style={styles.toggleBtn}
+              className="pg-sidebar-collapse-button"
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              aria-label={sidebarOpen ? 'Collapse conversations' : 'Expand conversations'}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+                {sidebarOpen ? <path d="M15 18l-6-6 6-6" /> : <path d="M9 18l6-6-6-6" />}
+              </svg>
+            </button>
+            <Breadcrumbs
+              items={[
+                { href: '/', label: t('playground.console', { defaultValue: '控制台' }) },
+                { label: t('playground.title', { defaultValue: 'AI 对话' }) },
+              ]}
+            />
+          </div>
+          <div style={styles.topbarRight} />
+        </header>
         <ChatView />
       </div>
 
