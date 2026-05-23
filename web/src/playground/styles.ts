@@ -176,7 +176,7 @@ export const styles: Record<string, CSSProperties> = {
     position: 'absolute',
     inset: 0,
     background: 'rgba(6, 10, 18, 0.64)',
-    zIndex: 2,
+    zIndex: 25,
   },
   sidebarMobile: {
     position: 'absolute',
@@ -186,6 +186,7 @@ export const styles: Record<string, CSSProperties> = {
     width: 'min(84vw, 320px)',
     minWidth: 'min(84vw, 320px)',
     boxShadow: '0 18px 48px rgba(0, 0, 0, 0.32)',
+    zIndex: 30,
   },
   sidebarHeader: {
     display: 'flex',
