@@ -69,7 +69,6 @@ function ChatShell() {
             <div style={styles.sidebarTopbar}>
               <Breadcrumbs
                 items={[
-                  { href: '/', label: t('playground.console', { defaultValue: '控制台' }) },
                   { label: t('playground.title', { defaultValue: 'AI 对话' }) },
                 ]}
               />
