@@ -10,7 +10,6 @@ export function InputArea() {
     canSendMessage,
     input,
     setInput,
-    autoResize,
     handlePaste,
     handleKeyDown,
     pendingImages,
@@ -40,7 +39,7 @@ export function InputArea() {
         ...styles.inputWrapper,
         ...(isMobile ? styles.inputWrapperMobile : null),
         ...(isActiveConversationStreaming ? styles.inputWrapperStreaming : null),
-      }}>
+      }} className="pg-input-wrapper">
         {pendingImages.length > 0 && (
           <div style={styles.imagePreviewList}>
             {pendingImages.map(image => (
@@ -74,14 +73,11 @@ export function InputArea() {
           ref={inputRef}
           style={styles.textarea}
           value={input}
-          onChange={event => {
-            setInput(event.target.value);
-            autoResize(event.target);
-          }}
+          onChange={event => setInput(event.target.value)}
           onPaste={handlePaste}
           onKeyDown={handleKeyDown}
           placeholder={t('playground.input_placeholder')}
-          rows={1}
+          rows={4}
           disabled={isActiveConversationStreaming}
         />
 
@@ -138,11 +134,22 @@ export function InputArea() {
                 : t('playground.show_thinking', { defaultValue: 'Show Thinking' })}
               aria-pressed={thinkingVisible}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
-                <circle cx="12" cy="12" r="3" />
-                {!thinkingVisible && <path d="M4 4l16 16" />}
-              </svg>
+              {thinkingVisible ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9 18h6" />
+                  <path d="M10 22h4" />
+                  <path d="M8.5 14.5c-1.4-1.2-2.2-2.9-2.2-4.8a5.7 5.7 0 0 1 11.4 0c0 1.9-.8 3.6-2.2 4.8-.7.6-1.1 1.4-1.1 2.2H9.6c0-.8-.4-1.6-1.1-2.2Z" />
+                  <path d="M12 1.8v1.8M4.6 4.6l1.3 1.3M19.4 4.6l-1.3 1.3M2 10h1.8M20.2 10H22" />
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9 18h6" />
+                  <path d="M10 22h4" />
+                  <path d="M8.5 14.5c-1.4-1.2-2.2-2.9-2.2-4.8a5.7 5.7 0 0 1 9-4.6" />
+                  <path d="M16.9 8.4c.5 2.2-.2 4.5-2.1 6.1-.7.6-1.1 1.4-1.1 2.2H9.6" />
+                  <path d="M4 4l16 16" />
+                </svg>
+              )}
               {t('playground.thinking_title', { defaultValue: 'Thinking' })}
             </button>
 

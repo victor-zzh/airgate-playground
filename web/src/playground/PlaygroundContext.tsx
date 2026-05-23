@@ -124,7 +124,6 @@ export interface PlaygroundContextValue {
   handleImageChange: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   handlePaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void;
   handleKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  autoResize: (target: HTMLTextAreaElement) => void;
   renderCustomSelect: (props: {
     id: string;
     value: string;
@@ -524,7 +523,6 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
 
       setInput('');
       setPendingImages([]);
-      if (inputRef.current) inputRef.current.style.height = '24px';
       if (fileInputRef.current) fileInputRef.current.value = '';
       setError('');
       setRetryRequest(null);
@@ -550,7 +548,6 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
 
         setInput('');
         setPendingImages([]);
-        if (inputRef.current) inputRef.current.style.height = '24px';
         if (fileInputRef.current) fileInputRef.current.value = '';
 
         await api.persistMessage({
@@ -578,10 +575,6 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
         if (!userMessagePersisted) {
           setInput(draftInput);
           setPendingImages(draftPendingImages);
-          if (inputRef.current) {
-            inputRef.current.style.height = '24px';
-            inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 220)}px`;
-          }
           if (fileInputRef.current) fileInputRef.current.value = '';
           setMessages(previousMessages);
           if (conversationCreated && activeIdRef.current === conversationID) {
@@ -692,11 +685,6 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     fileInputRef.current?.click();
   }, []);
 
-  const autoResize = useCallback((target: HTMLTextAreaElement) => {
-    target.style.height = '24px';
-    target.style.height = `${Math.min(target.scrollHeight, 220)}px`;
-  }, []);
-
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== 'Enter' || event.shiftKey) return;
     event.preventDefault();
@@ -740,15 +728,15 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   }) => (
     <select
       id={id}
+      className="pg-composer-select"
       value={value}
       onChange={event => onChange(event.target.value)}
       aria-label={ariaLabel}
       style={{
         ...styles.selectTrigger,
-        minWidth: id === 'model' ? 180 : 96,
-        maxWidth: id === 'model' ? 260 : 120,
+        minWidth: id === 'model' ? 188 : 112,
+        maxWidth: id === 'model' ? 280 : 132,
         flexShrink: id === 'model' ? 1 : 0,
-        appearance: 'auto',
         ...style,
       }}
     >
@@ -821,7 +809,6 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     handleImageChange,
     handlePaste,
     handleKeyDown,
-    autoResize,
     renderCustomSelect,
     interactiveMessageOptions,
   };

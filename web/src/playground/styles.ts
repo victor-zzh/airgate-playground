@@ -1,6 +1,8 @@
 import type { CSSProperties } from 'react';
 import { cssVar } from '@doudou-start/airgate-theme';
 
+const PLAYGROUND_COMPOSER_TEXTAREA_HEIGHT = 112;
+
 export const keyframes = `
 @keyframes pg-pulse {
   0%, 100% { opacity: 1; }
@@ -27,7 +29,7 @@ export const keyframes = `
 /* 删除按钮：hover 才显出，颜色保持中性，hover 时才染 danger */
 .pg-conv-delete {
   opacity: 0;
-  color: var(--ag-color-textTertiary, #9ca3af);
+  color: var(--ag-text-tertiary, #9ca3af);
   transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
 }
 .pg-conv-item:hover .pg-conv-delete,
@@ -35,12 +37,12 @@ export const keyframes = `
   opacity: 1;
 }
 .pg-conv-delete:hover {
-  background: var(--ag-color-dangerSubtle, rgba(239, 68, 68, 0.12));
-  color: var(--ag-color-danger, #ef4444);
+  background: var(--ag-danger-subtle, rgba(239, 68, 68, 0.12));
+  color: var(--ag-danger, #ef4444);
 }
 .pg-conv-delete:focus-visible {
   opacity: 1;
-  outline: 2px solid var(--ag-color-borderFocus, #3b82f6);
+  outline: 2px solid var(--ag-border-focus, #3b82f6);
   outline-offset: 1px;
 }
 
@@ -50,38 +52,75 @@ export const keyframes = `
 .pg-conv-item:hover,
 .pg-sidebar-action:hover,
 .pg-sidebar-link:hover {
-  background: var(--ag-color-bgHover, rgba(148, 163, 184, 0.12)) !important;
-  color: var(--ag-color-text, #111827) !important;
+  background: var(--ag-bg-hover, rgba(148, 163, 184, 0.12)) !important;
+  color: var(--ag-text, #111827) !important;
 }
 .pg-conv-item.is-active {
-  background: var(--ag-color-bgHover, rgba(148, 163, 184, 0.12)) !important;
+  background: var(--ag-bg-hover, rgba(148, 163, 184, 0.12)) !important;
 }
 .pg-sidebar-action:focus-visible,
 .pg-sidebar-link:focus-visible {
-  outline: 2px solid var(--ag-color-borderFocus, #3b82f6);
+  outline: 2px solid var(--ag-border-focus, #3b82f6);
   outline-offset: 2px;
 }
 .pg-sidebar-collapse-button svg {
   stroke-width: 2.5;
 }
 .pg-sidebar-collapse-button:hover {
-  background: var(--ag-color-bgHover, rgba(148, 163, 184, 0.12)) !important;
-  color: var(--ag-color-text, #111827) !important;
+  background: var(--ag-bg-hover, rgba(148, 163, 184, 0.12)) !important;
+  color: var(--ag-text, #111827) !important;
+}
+.pg-topbar-button:hover {
+  background: var(--ag-bg-hover, rgba(148, 163, 184, 0.12)) !important;
+  color: var(--ag-text, #111827) !important;
+}
+.pg-topbar-button:focus-visible {
+  outline: 2px solid var(--ag-border-focus, #3b82f6);
+  outline-offset: 2px;
+}
+.pg-topbar-logout:hover {
+  background: var(--ag-danger-subtle, rgba(239, 68, 68, 0.12)) !important;
+  color: var(--ag-danger, #ef4444) !important;
 }
 .pg-topbar {
-  background: color-mix(in oklab, var(--ag-color-bgDeep, #020617) 78%, transparent) !important;
+  background: color-mix(in oklab, var(--ag-bg, #f8fafc) 78%, transparent) !important;
 }
 [data-theme="dark"] .pg-topbar,
 .dark .pg-topbar {
-  background: color-mix(in oklab, var(--ag-color-bgDeep, #020617) 82%, transparent) !important;
-  border-bottom-color: color-mix(in oklab, var(--ag-color-borderSubtle, rgba(148, 163, 184, 0.18)) 34%, transparent) !important;
+  background: color-mix(in oklab, var(--ag-bg, #0f172a) 82%, transparent) !important;
+  border-bottom-color: color-mix(in oklab, var(--ag-border, rgba(148, 163, 184, 0.18)) 34%, transparent) !important;
   box-shadow:
     0 1px 0 color-mix(in oklab, white 4%, transparent) inset,
     0 4px 16px color-mix(in oklab, black 10%, transparent) !important;
 }
 @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
   .pg-topbar {
-    background: color-mix(in oklab, var(--ag-color-bg, #0f172a) 92%, transparent) !important;
+    background: color-mix(in oklab, var(--ag-bg-surface, #ffffff) 92%, transparent) !important;
+  }
+}
+.pg-input-wrapper:focus-within {
+  border-color: color-mix(in oklab, var(--ag-primary, #2dd4bf) 35%, transparent) !important;
+  box-shadow:
+    0 8px 40px rgba(0, 0, 0, 0.18),
+    0 2px 12px rgba(0, 0, 0, 0.08),
+    0 0 0 1px color-mix(in oklab, var(--ag-primary, #2dd4bf) 12%, transparent) !important;
+}
+.pg-composer-select:hover {
+  border-color: var(--ag-border, rgba(148, 163, 184, 0.26)) !important;
+  color: var(--ag-text, #111827) !important;
+}
+.pg-composer-select:focus-visible {
+  border-color: color-mix(in oklab, var(--ag-primary, #2dd4bf) 38%, transparent) !important;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ag-primary, #2dd4bf) 14%, transparent);
+}
+.pg-composer-select option {
+  background: var(--ag-bg-surface, #ffffff);
+  color: var(--ag-text, #111827);
+}
+@media (max-width: 720px) {
+  .pg-topbar-user-text,
+  .pg-topbar-lang-text {
+    display: none !important;
   }
 }
 `;
@@ -152,61 +191,67 @@ export const styles: Record<string, CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'stretch',
-    gap: 0,
-    padding: '60px 0 10px',
+    gap: 2,
+    padding: '0 12px 10px',
+  },
+  sidebarTopbar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    minWidth: 0,
+    height: 48,
   },
   breadcrumbs: {
     display: 'inline-flex',
     alignItems: 'center',
     minWidth: 0,
-    gap: 6,
+    gap: 7,
   },
   breadcrumbItem: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: 6,
+    gap: 7,
     minWidth: 0,
   },
   breadcrumbLink: {
     display: 'inline-flex',
     alignItems: 'center',
     minWidth: 0,
-    padding: '3px 4px',
-    borderRadius: 6,
+    padding: '4px 10px',
+    borderRadius: 8,
     color: cssVar('textTertiary'),
-    fontFamily: cssVar('fontMono'),
-    fontSize: 11,
-    fontWeight: 600,
-    letterSpacing: '0.02em',
+    fontFamily: cssVar('fontSans'),
+    fontSize: 15,
+    fontWeight: 400,
+    letterSpacing: 0,
     textDecoration: 'none',
-    textTransform: 'uppercase',
     transition: cssVar('transition'),
   },
   breadcrumbCurrent: {
-    color: cssVar('textTertiary'),
-    fontFamily: cssVar('fontMono'),
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: '0.04em',
+    color: cssVar('text'),
+    fontFamily: cssVar('fontSans'),
+    fontSize: 15,
+    fontWeight: 400,
+    letterSpacing: 0,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
-    textTransform: 'uppercase',
     whiteSpace: 'nowrap',
   },
   breadcrumbSeparator: {
     color: cssVar('textTertiary'),
     flexShrink: 0,
-    fontSize: 11,
+    fontSize: 15,
     opacity: 0.45,
   },
   newBtn: {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'flex-start',
-    width: 'calc(100% - 24px)',
+    width: '100%',
+    minWidth: 0,
     minHeight: 36,
     gap: 12,
-    margin: '0 12px',
     padding: '0 10px',
     border: 'none',
     borderRadius: 8,
@@ -221,13 +266,13 @@ export const styles: Record<string, CSSProperties> = {
     lineHeight: '20px',
     letterSpacing: 0,
   },
-  sidebarSectionLabel: {
-    padding: '6px 22px 7px',
-    color: cssVar('textTertiary'),
-    fontSize: 10,
-    fontWeight: 500,
-    letterSpacing: '0.04em',
-    textTransform: 'uppercase',
+  newBtnIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 20,
+    height: 20,
+    flexShrink: 0,
   },
   convList: {
     flex: 1,
@@ -336,8 +381,8 @@ export const styles: Record<string, CSSProperties> = {
     height: 48,
     gap: 12,
     padding: '0 16px',
-    borderBottom: `1px solid color-mix(in oklab, ${cssVar('borderSubtle')} 28%, transparent)`,
-    boxShadow: `0 1px 0 color-mix(in oklab, white 16%, transparent) inset, 0 4px 16px color-mix(in oklab, ${cssVar('bgDeep')} 10%, transparent)`,
+    borderBottom: `1px solid color-mix(in oklab, ${cssVar('border')} 28%, transparent)`,
+    boxShadow: `0 1px 0 color-mix(in oklab, white 16%, transparent) inset, 0 4px 16px color-mix(in oklab, ${cssVar('bg')} 10%, transparent)`,
     backdropFilter: 'saturate(160%) blur(16px)',
     WebkitBackdropFilter: 'saturate(160%) blur(16px)',
     pointerEvents: 'auto',
@@ -351,10 +396,102 @@ export const styles: Record<string, CSSProperties> = {
   topbarRight: {
     display: 'flex',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
     flexShrink: 0,
   },
-
+  topbarTextBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    height: 40,
+    padding: '0 12px',
+    border: 'none',
+    borderRadius: cssVar('radiusSm'),
+    background: 'transparent',
+    color: cssVar('textSecondary'),
+    cursor: 'pointer',
+    transition: cssVar('transition'),
+    fontFamily: cssVar('fontSans'),
+    fontSize: 12,
+    fontWeight: 500,
+  },
+  topbarLangText: {
+    width: 32,
+    textAlign: 'center' as const,
+    fontFamily: cssVar('fontMono'),
+    fontSize: 12,
+    textTransform: 'uppercase',
+  },
+  topbarIconBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 40,
+    minWidth: 40,
+    height: 40,
+    border: 'none',
+    borderRadius: cssVar('radiusSm'),
+    background: 'transparent',
+    color: cssVar('textSecondary'),
+    cursor: 'pointer',
+    transition: cssVar('transition'),
+  },
+  topbarLogoutBtn: {
+    color: cssVar('textSecondary'),
+  },
+  topbarDivider: {
+    width: 1,
+    height: 24,
+    margin: '0 4px',
+    background: cssVar('border'),
+    flexShrink: 0,
+  },
+  topbarUser: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    minWidth: 0,
+  },
+  topbarUserText: {
+    display: 'block',
+    minWidth: 0,
+    textAlign: 'right' as const,
+  },
+  topbarUserName: {
+    color: cssVar('text'),
+    fontSize: 14,
+    fontWeight: 500,
+    lineHeight: 1.2,
+    maxWidth: 140,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  topbarUserEmail: {
+    color: cssVar('textTertiary'),
+    fontSize: 12,
+    lineHeight: 1.2,
+    maxWidth: 160,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  topbarAvatar: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: cssVar('radiusSm'),
+    color: cssVar('primary'),
+    fontSize: 14,
+    fontWeight: 700,
+    flexShrink: 0,
+  },
+  topbarAdminAvatar: {
+    fontWeight: 500,
+  },
   toggleBtn: {
     display: 'flex',
     alignItems: 'center',
@@ -387,21 +524,33 @@ export const styles: Record<string, CSSProperties> = {
     flexWrap: 'wrap',
   },
   selectTrigger: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 6,
+    display: 'block',
     width: 'auto',
     maxWidth: '100%',
-    border: 'none',
-    borderRadius: 8,
-    background: 'transparent',
+    height: 28,
+    padding: '0 28px 0 10px',
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    borderRadius: 7,
+    backgroundColor: cssVar('bgHover'),
+    backgroundImage: 'linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%)',
+    backgroundPosition: 'calc(100% - 13px) 50%, calc(100% - 8px) 50%',
+    backgroundRepeat: 'no-repeat',
+    backgroundSize: '5px 5px, 5px 5px',
     color: cssVar('textSecondary'),
-    fontFamily: cssVar('fontSans'),
-    fontWeight: 500,
+    fontFamily: cssVar('fontMono'),
+    fontSize: 11,
+    fontWeight: 600,
+    lineHeight: '26px',
     outline: 'none',
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    MozAppearance: 'none',
     cursor: 'pointer',
     transition: cssVar('transition'),
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    boxSizing: 'border-box',
   },
   // ── Messages ──
   messagesArea: {
@@ -907,26 +1056,26 @@ export const styles: Record<string, CSSProperties> = {
   inputWrapper: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 8,
-    border: `1px solid ${cssVar('border')}`,
-    borderRadius: 22,
-    background: cssVar('bgSurface'),
-    paddingTop: 10,
-    paddingRight: 12,
-    paddingBottom: 8,
-    paddingLeft: 12,
-    transition: cssVar('transition'),
+    gap: 0,
+    border: `1px solid ${cssVar('glassBorder')}`,
+    borderRadius: 20,
+    background: cssVar('bgElevated'),
+    paddingTop: 6,
+    paddingRight: 6,
+    paddingBottom: 10,
+    paddingLeft: 6,
+    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.18), 0 2px 12px rgba(0, 0, 0, 0.08)',
+    transition: 'box-shadow 0.3s, border-color 0.15s',
     width: '100%',
     maxWidth: 768,
     margin: '0 auto',
   },
   inputWrapperMobile: {
-    gap: 7,
     borderRadius: 20,
-    paddingTop: 9,
-    paddingRight: 10,
+    paddingTop: 6,
+    paddingRight: 6,
     paddingBottom: 8,
-    paddingLeft: 10,
+    paddingLeft: 6,
   },
   inputWrapperStreaming: {
     borderColor: cssVar('borderSubtle'),
@@ -935,6 +1084,7 @@ export const styles: Record<string, CSSProperties> = {
     display: 'flex',
     flexWrap: 'wrap',
     gap: 8,
+    padding: '6px 12px 2px',
   },
   imagePreviewItem: {
     position: 'relative',
@@ -970,23 +1120,27 @@ export const styles: Record<string, CSSProperties> = {
   },
   textarea: {
     width: '100%',
+    height: PLAYGROUND_COMPOSER_TEXTAREA_HEIGHT,
+    minHeight: PLAYGROUND_COMPOSER_TEXTAREA_HEIGHT,
+    maxHeight: PLAYGROUND_COMPOSER_TEXTAREA_HEIGHT,
+    padding: '8px 14px',
     border: 'none',
     background: 'transparent',
     color: cssVar('text'),
     fontSize: 14,
-    fontFamily: cssVar('fontSans'),
+    fontFamily: 'inherit',
     resize: 'none',
     outline: 'none',
-    lineHeight: 1.55,
-    height: 24,
-    minHeight: 24,
-    maxHeight: 128,
+    lineHeight: 1.6,
+    overflowY: 'auto',
+    boxSizing: 'border-box',
   },
   inputActions: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 12,
+    gap: 8,
+    padding: '2px 8px 0',
   },
   inputActionsMobile: {
     alignItems: 'stretch',
@@ -1011,13 +1165,17 @@ export const styles: Record<string, CSSProperties> = {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 6,
-    padding: '7px 12px',
-    border: 'none',
-    borderRadius: 999,
-    background: 'transparent',
+    height: 28,
+    padding: '0 10px',
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    borderRadius: 7,
+    background: cssVar('bgHover'),
     color: cssVar('textSecondary'),
-    fontSize: 12,
-    fontWeight: 500,
+    fontSize: 11,
+    fontWeight: 600,
+    lineHeight: '26px',
+    whiteSpace: 'nowrap',
+    boxSizing: 'border-box',
     cursor: 'pointer',
     transition: cssVar('transition'),
   },
@@ -1025,32 +1183,40 @@ export const styles: Record<string, CSSProperties> = {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 6,
-    padding: '7px 12px',
+    height: 28,
+    padding: '0 10px',
     border: `1px solid ${cssVar('borderSubtle')}`,
-    borderRadius: 999,
-    background: 'transparent',
-    color: cssVar('textTertiary'),
-    fontSize: 12,
+    borderRadius: 7,
+    background: cssVar('bgHover'),
+    color: cssVar('textSecondary'),
+    fontSize: 11,
     fontWeight: 600,
+    lineHeight: '26px',
+    whiteSpace: 'nowrap',
+    boxSizing: 'border-box',
     cursor: 'pointer',
     transition: cssVar('transition'),
   },
   thinkingToggleBtnActive: {
     background: cssVar('primarySubtle'),
-    borderColor: 'rgba(45, 212, 191, 0.28)',
+    borderColor: `color-mix(in oklab, ${cssVar('primary')} 38%, transparent)`,
     color: cssVar('primary'),
   },
   sendBtn: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 6,
-    padding: '7px 14px',
-    border: 'none',
-    borderRadius: 999,
+    height: 28,
+    padding: '0 12px',
+    border: `1px solid color-mix(in oklab, ${cssVar('primary')} 45%, transparent)`,
+    borderRadius: 7,
     background: cssVar('primary'),
     color: cssVar('textInverse'),
-    fontSize: 13,
-    fontWeight: 500,
+    fontSize: 12,
+    fontWeight: 600,
+    lineHeight: '26px',
+    whiteSpace: 'nowrap',
+    boxSizing: 'border-box',
     cursor: 'pointer',
     transition: cssVar('transition'),
   },
@@ -1058,13 +1224,17 @@ export const styles: Record<string, CSSProperties> = {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 6,
-    padding: '7px 14px',
-    border: 'none',
-    borderRadius: 999,
+    height: 28,
+    padding: '0 12px',
+    border: `1px solid color-mix(in oklab, ${cssVar('danger')} 35%, transparent)`,
+    borderRadius: 7,
     background: cssVar('dangerSubtle'),
     color: cssVar('danger'),
-    fontSize: 13,
-    fontWeight: 500,
+    fontSize: 12,
+    fontWeight: 600,
+    lineHeight: '26px',
+    whiteSpace: 'nowrap',
+    boxSizing: 'border-box',
     cursor: 'pointer',
   },
   actionBtnMobile: {
