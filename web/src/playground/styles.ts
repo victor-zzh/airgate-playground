@@ -352,7 +352,6 @@ export const styles: Record<string, CSSProperties> = {
     outline: 'none',
     appearance: 'auto',
     WebkitAppearance: 'menulist',
-    MozAppearance: 'auto',
     cursor: 'pointer',
     transition: cssVar('transition'),
     overflow: 'hidden',
