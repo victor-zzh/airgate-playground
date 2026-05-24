@@ -7,41 +7,14 @@ import { styles, keyframes } from './playground/styles';
 export function ChatPage() {
   return (
     <PlaygroundProvider>
-      <ChatShell />
+      <PlaygroundShell />
     </PlaygroundProvider>
   );
 }
 
 export default ChatPage;
 
-type BreadcrumbItem = {
-  href?: string;
-  label: string;
-};
-
-function Breadcrumbs({ items }: { items: BreadcrumbItem[] }) {
-  return (
-    <nav aria-label="Breadcrumbs" style={styles.breadcrumbs}>
-      {items.map((item, index) => {
-        const isLast = index === items.length - 1;
-        return (
-          <span key={`${index}-${item.label}`} style={styles.breadcrumbItem}>
-            {item.href && !isLast ? (
-              <a href={item.href} style={styles.breadcrumbLink} className="pg-sidebar-link">
-                {item.label}
-              </a>
-            ) : (
-              <span style={styles.breadcrumbCurrent}>{item.label}</span>
-            )}
-            {!isLast && <span aria-hidden="true" style={styles.breadcrumbSeparator}>/</span>}
-          </span>
-        );
-      })}
-    </nav>
-  );
-}
-
-function ChatShell() {
+function PlaygroundShell() {
   const { t } = useTranslation();
   const {
     isMobile,
@@ -67,12 +40,20 @@ function ChatShell() {
         <div style={{ ...styles.sidebar, ...(isMobile ? styles.sidebarMobile : null) }}>
           <div style={styles.sidebarHeader}>
             <div style={styles.sidebarTopbar}>
-              <Breadcrumbs
-                items={[
-                  { href: '/', label: t('playground.console', { defaultValue: '控制台' }) },
-                  { label: t('playground.title', { defaultValue: 'AI 对话' }) },
-                ]}
-              />
+              <button
+                style={styles.newBtn}
+                className="pg-sidebar-action"
+                onClick={createConversation}
+                title={t('playground.new_conversation')}
+                aria-label={t('playground.new_conversation')}
+              >
+                <span style={styles.newBtnIcon}>
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                    <path d="M7 1v12M1 7h12" />
+                  </svg>
+                </span>
+                <span>{t('playground.new_conversation')}</span>
+              </button>
               <button
                 style={styles.toggleBtn}
                 className="pg-sidebar-collapse-button"
@@ -84,20 +65,6 @@ function ChatShell() {
                 </svg>
               </button>
             </div>
-            <button
-              style={styles.newBtn}
-              className="pg-sidebar-action"
-              onClick={createConversation}
-              title={t('playground.new_conversation')}
-              aria-label={t('playground.new_conversation')}
-            >
-              <span style={styles.newBtnIcon}>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                  <path d="M7 1v12M1 7h12" />
-                </svg>
-              </span>
-              <span>{t('playground.new_conversation')}</span>
-            </button>
           </div>
 
           <div style={styles.convList}>

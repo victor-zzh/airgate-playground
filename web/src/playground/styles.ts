@@ -50,16 +50,14 @@ export const keyframes = `
   position: relative;
 }
 .pg-conv-item:hover,
-.pg-sidebar-action:hover,
-.pg-sidebar-link:hover {
+.pg-sidebar-action:hover {
   background: var(--ag-bg-hover, rgba(148, 163, 184, 0.12)) !important;
   color: var(--ag-text, #111827) !important;
 }
 .pg-conv-item.is-active {
   background: var(--ag-bg-hover, rgba(148, 163, 184, 0.12)) !important;
 }
-.pg-sidebar-action:focus-visible,
-.pg-sidebar-link:focus-visible {
+.pg-sidebar-action:focus-visible {
   outline: 2px solid var(--ag-border-focus, #3b82f6);
   outline-offset: 2px;
 }
@@ -77,13 +75,23 @@ export const keyframes = `
     0 2px 12px rgba(0, 0, 0, 0.08),
     0 0 0 1px color-mix(in oklab, var(--ag-primary, #2dd4bf) 12%, transparent) !important;
 }
+.pg-composer-select {
+  color-scheme: light;
+}
+[data-theme="dark"] .pg-composer-select,
+.dark .pg-composer-select {
+  color-scheme: dark;
+}
 .pg-composer-select:hover {
   border-color: var(--ag-border, rgba(148, 163, 184, 0.26)) !important;
   color: var(--ag-text, #111827) !important;
 }
+.pg-composer-select:focus {
+  outline: none;
+}
 .pg-composer-select:focus-visible {
   border-color: color-mix(in oklab, var(--ag-primary, #2dd4bf) 38%, transparent) !important;
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ag-primary, #2dd4bf) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ag-primary, #2dd4bf) 22%, transparent);
 }
 .pg-composer-select option {
   background: var(--ag-bg-surface, #ffffff);
@@ -159,7 +167,7 @@ export const styles: Record<string, CSSProperties> = {
     flexDirection: 'column',
     alignItems: 'stretch',
     gap: 2,
-    padding: '0 12px 10px',
+    padding: '8px 12px 10px',
   },
   sidebarTopbar: {
     display: 'flex',
@@ -167,57 +175,16 @@ export const styles: Record<string, CSSProperties> = {
     justifyContent: 'space-between',
     gap: 8,
     minWidth: 0,
-    height: 48,
-  },
-  breadcrumbs: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    minWidth: 0,
-    gap: 7,
-  },
-  breadcrumbItem: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 7,
-    minWidth: 0,
-  },
-  breadcrumbLink: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    minWidth: 0,
-    padding: '4px 10px',
-    borderRadius: 8,
-    color: cssVar('textTertiary'),
-    fontFamily: cssVar('fontSans'),
-    fontSize: 15,
-    fontWeight: 400,
-    letterSpacing: 0,
-    textDecoration: 'none',
-    transition: cssVar('transition'),
-  },
-  breadcrumbCurrent: {
-    color: cssVar('text'),
-    fontFamily: cssVar('fontSans'),
-    fontSize: 15,
-    fontWeight: 400,
-    letterSpacing: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  breadcrumbSeparator: {
-    color: cssVar('textTertiary'),
-    flexShrink: 0,
-    fontSize: 15,
-    opacity: 0.45,
+    height: 40,
   },
   newBtn: {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'flex-start',
-    width: '100%',
+    flex: 1,
+    width: 'auto',
     minWidth: 0,
-    minHeight: 36,
+    minHeight: 40,
     gap: 12,
     padding: '0 10px',
     border: 'none',
@@ -372,23 +339,20 @@ export const styles: Record<string, CSSProperties> = {
     width: 'auto',
     maxWidth: '100%',
     height: 28,
-    padding: '0 28px 0 10px',
+    padding: '0 8px',
     border: `1px solid ${cssVar('borderSubtle')}`,
     borderRadius: 7,
     backgroundColor: cssVar('bgHover'),
-    backgroundImage: 'linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%)',
-    backgroundPosition: 'calc(100% - 13px) 50%, calc(100% - 8px) 50%',
-    backgroundRepeat: 'no-repeat',
-    backgroundSize: '5px 5px, 5px 5px',
+    backgroundClip: 'padding-box',
     color: cssVar('textSecondary'),
-    fontFamily: cssVar('fontMono'),
-    fontSize: 11,
+    fontFamily: 'inherit',
+    fontSize: 12,
     fontWeight: 600,
-    lineHeight: '26px',
+    lineHeight: 'normal',
     outline: 'none',
-    appearance: 'none',
-    WebkitAppearance: 'none',
-    MozAppearance: 'none',
+    appearance: 'auto',
+    WebkitAppearance: 'menulist',
+    MozAppearance: 'auto',
     cursor: 'pointer',
     transition: cssVar('transition'),
     overflow: 'hidden',
@@ -404,6 +368,7 @@ export const styles: Record<string, CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     position: 'relative',
+    paddingTop: 0,
   },
 
   // ── Empty state ──
