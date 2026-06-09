@@ -1,5 +1,5 @@
 import { Children, Suspense, cloneElement, isValidElement, lazy, useState, type ReactNode } from 'react';
-import type { MessageContentOptions, PreviewImage } from './types';
+import type { MessageContentOptions } from './types';
 import { styles } from './styles';
 import { isSafeImageUrl, isSafeLinkUrl } from './utils';
 import { IMAGE_MARKDOWN_ITEM_RE } from './constants';

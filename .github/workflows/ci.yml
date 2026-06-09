@@ -26,8 +26,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
-      - name: Install web dependencies
-        run: cd web && pnpm install --frozen-lockfile
+      - name: Build frontend
+        run: cd web && pnpm install --frozen-lockfile && pnpm run build
 
       - uses: actions/setup-go@v5
         with:
