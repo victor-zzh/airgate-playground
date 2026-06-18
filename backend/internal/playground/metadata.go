@@ -13,7 +13,7 @@ func BuildPluginInfo() sdk.PluginInfo {
 		Version:     PluginVersion,
 		SDKVersion:  sdk.SDKVersion,
 		Description: "Web-based AI chat playground with multi-model support and conversation management",
-		Author:      "AirGate",
+		Author:      "HopBase",
 		Type:        sdk.PluginTypeExtension,
 		ConfigSchema: []sdk.ConfigField{
 			{
