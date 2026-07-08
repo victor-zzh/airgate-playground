@@ -1,5 +1,5 @@
 import type { ChatMessageContent, ModelInfo } from './types';
-import type { BlobUrlRegistry, PendingImage, PreviewImage } from './types';
+import type { BlobUrlRegistry, PendingFile, PendingImage, PreviewImage } from './types';
 import {
   ACTIVE_CONVERSATION_STORAGE_KEY,
   BASE64_DATA_URL_RE,
@@ -7,6 +7,7 @@ import {
   IMAGE_MARKDOWN_ITEM_RE,
   IMAGE_MARKDOWN_RE,
   MAX_IMAGE_BYTES,
+  MAX_TEXT_FILE_BYTES,
   SELECTED_MODEL_STORAGE_KEY,
 } from './constants';
 
@@ -52,10 +53,21 @@ export function escapeMarkdownAlt(text: string) {
   return text.replace(/[\]\\]/g, '');
 }
 
-export function messageContentWithImages(text: string, images: PendingImage[]) {
+export function messageContentWithAttachments(text: string, images: PendingImage[], files: PendingFile[]) {
   const body = text.trim();
   const imageMarkdown = images.map(image => `![${escapeMarkdownAlt(image.name)}](${image.url})`).join('\n');
-  return [body, imageMarkdown].filter(Boolean).join('\n\n');
+  const fileText = files.map(file => (
+    `<file name="${escapeFileAttribute(file.name)}" type="${escapeFileAttribute(file.type || 'text/plain')}" size="${file.size}">\n${file.content}\n</file>`
+  )).join('\n\n');
+  return [body, fileText, imageMarkdown].filter(Boolean).join('\n\n');
+}
+
+export function messageContentWithImages(text: string, images: PendingImage[]) {
+  return messageContentWithAttachments(text, images, []);
+}
+
+function escapeFileAttribute(text: string) {
+  return text.replace(/[&"]/g, (ch) => (ch === '&' ? '&amp;' : '&quot;'));
 }
 
 export async function fileToDataURL(file: File) {
@@ -78,6 +90,28 @@ export async function imagesFromFiles(files: File[]) {
     name: file.name || 'pasted-image',
     url: await fileToDataURL(file),
     file,
+  })));
+}
+
+export function isSupportedTextFile(file: File) {
+  const name = file.name.toLowerCase();
+  if (file.type.startsWith('text/')) return true;
+  return /\.(txt|md|markdown|csv|json|jsonl|log|xml|yaml|yml|ts|tsx|js|jsx|py|go|rs|java|kt|swift|sql|html|css)$/i.test(name);
+}
+
+export async function textFilesFromFiles(files: File[]): Promise<PendingFile[]> {
+  const textFiles = files.filter(file => !file.type.startsWith('image/') && isSupportedTextFile(file));
+  if (!textFiles.length) return [];
+  if (textFiles.some(file => file.size > MAX_TEXT_FILE_BYTES)) {
+    throw new Error('Text files must be 512KB or smaller');
+  }
+
+  return Promise.all(textFiles.map(async file => ({
+    id: `${file.name}-${file.lastModified}-${file.size}`,
+    name: file.name || 'attachment.txt',
+    content: await file.text(),
+    size: file.size,
+    type: file.type || 'text/plain',
   })));
 }
 

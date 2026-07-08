@@ -18,6 +18,7 @@ import type {
   Message,
   MessageContentOptions,
   ModelInfo,
+  PendingFile,
   PendingImage,
   ReasoningEffort,
   RetryRequest,
@@ -38,13 +39,14 @@ import {
   getStoredActiveConversationId,
   getStoredSelectedModel,
   imagesFromFiles,
-  messageContentWithImages,
+  messageContentWithAttachments,
   modelOptionValue,
   readLocalStorageValue,
   replaceBase64WithBlobUrls,
   replaceBlobUrlsWithBase64,
   revokeBlobRegistry,
   supportsReasoning,
+  textFilesFromFiles,
   titleFromMessageContent,
   toChatMessageContent,
   writeLocalStorageValue,
@@ -85,6 +87,7 @@ export interface PlaygroundContextValue {
   input: string;
   setInput: React.Dispatch<React.SetStateAction<string>>;
   pendingImages: PendingImage[];
+  pendingFiles: PendingFile[];
   canSendMessage: boolean;
 
   error: string;
@@ -120,8 +123,9 @@ export interface PlaygroundContextValue {
   showImagePreview: (images: Array<{ url: string; alt: string }>, index: number) => void;
   showNextPreviewImage: (direction: number) => void;
   removePendingImage: (id: string) => void;
+  removePendingFile: (id: string) => void;
   triggerImagePicker: () => void;
-  handleImageChange: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
+  handleAttachmentChange: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   handlePaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void;
   handleKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   renderNativeSelect: (props: {
@@ -156,6 +160,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [selectedModel, setSelectedModel] = useState(() => {
     const storedModel = getStoredSelectedModel();
     return CHAT_MODEL_REGISTRY.some(model => modelOptionValue(model) === storedModel)
@@ -233,7 +238,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     selectedPlatform &&
     selectedModelID &&
     !isStreaming &&
-    (input.trim() || pendingImages.length > 0),
+    (input.trim() || pendingImages.length > 0 || pendingFiles.length > 0),
   );
 
   const resolveGroupID = useCallback(() => activeConversation?.group_id || 0, [activeConversation?.group_id]);
@@ -348,6 +353,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     setActiveId(DRAFT_CONVERSATION_ID);
     setMessages([]);
     setPendingImages([]);
+    setPendingFiles([]);
     setError('');
     setRetryRequest(null);
     if (isMobile) setSidebarOpen(false);
@@ -357,6 +363,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   const openConversation = useCallback((id: number) => {
     setActiveId(id);
     setPendingImages([]);
+    setPendingFiles([]);
     setError('');
     setRetryRequest(null);
     if (isMobile) setSidebarOpen(false);
@@ -499,8 +506,9 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
       pendingRefocusRef.current = true;
       const draftInput = input;
       const draftPendingImages = pendingImages;
+      const draftPendingFiles = pendingFiles;
       const previousMessages = messages;
-      const content = messageContentWithImages(draftInput, draftPendingImages);
+      const content = messageContentWithAttachments(draftInput, draftPendingImages, draftPendingFiles);
       const groupID = resolveGroupID();
       let conversationID = activeId;
       let conversationCreated = false;
@@ -523,6 +531,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
 
       setInput('');
       setPendingImages([]);
+      setPendingFiles([]);
       if (fileInputRef.current) fileInputRef.current.value = '';
       setError('');
       setRetryRequest(null);
@@ -548,6 +557,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
 
         setInput('');
         setPendingImages([]);
+        setPendingFiles([]);
         if (fileInputRef.current) fileInputRef.current.value = '';
 
         await api.persistMessage({
@@ -575,6 +585,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
         if (!userMessagePersisted) {
           setInput(draftInput);
           setPendingImages(draftPendingImages);
+          setPendingFiles(draftPendingFiles);
           if (fileInputRef.current) fileInputRef.current.value = '';
           setMessages(previousMessages);
           if (conversationCreated && activeIdRef.current === conversationID) {
@@ -596,6 +607,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     input,
     messages,
     pendingImages,
+    pendingFiles,
     reasoningEffort,
     resolveGroupID,
     selectedModelID,
@@ -658,27 +670,42 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     setRetryRequest(null);
   }, []);
 
-  const handleImageChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const addTextFiles = useCallback(async (files: File[]) => {
+    if (!files.length) return;
+    const nextFiles = await textFilesFromFiles(files);
+    if (!nextFiles.length) return;
+    setPendingFiles(prev => [...prev, ...nextFiles]);
+    setError('');
+    setRetryRequest(null);
+  }, []);
+
+  const handleAttachmentChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
     try {
-      await addImageFiles(Array.from(event.target.files || []));
+      await addImageFiles(files);
+      await addTextFiles(files);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to read image');
+      setError(err instanceof Error ? err.message : 'Failed to read file');
     } finally {
       event.target.value = '';
     }
-  }, [addImageFiles]);
+  }, [addImageFiles, addTextFiles]);
 
   const handlePaste = useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = Array.from(event.clipboardData.files || []).filter(file => file.type.startsWith('image/'));
+    const files = Array.from(event.clipboardData.files || []);
     if (!files.length) return;
     event.preventDefault();
-    void addImageFiles(files).catch(err => {
-      setError(err instanceof Error ? err.message : 'Failed to read image');
+    void Promise.all([addImageFiles(files), addTextFiles(files)]).catch(err => {
+      setError(err instanceof Error ? err.message : 'Failed to read file');
     });
-  }, [addImageFiles]);
+  }, [addImageFiles, addTextFiles]);
 
   const removePendingImage = useCallback((id: string) => {
     setPendingImages(prev => prev.filter(item => item.id !== id));
+  }, []);
+
+  const removePendingFile = useCallback((id: string) => {
+    setPendingFiles(prev => prev.filter(item => item.id !== id));
   }, []);
 
   const triggerImagePicker = useCallback(() => {
@@ -774,6 +801,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     input,
     setInput,
     pendingImages,
+    pendingFiles,
     canSendMessage,
     error,
     retryRequest,
@@ -805,8 +833,9 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     showImagePreview,
     showNextPreviewImage,
     removePendingImage,
+    removePendingFile,
     triggerImagePicker,
-    handleImageChange,
+    handleAttachmentChange,
     handlePaste,
     handleKeyDown,
     renderNativeSelect,

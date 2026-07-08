@@ -205,8 +205,7 @@ export async function chatCompletionsStream(
         if (!trimmed.startsWith('data: ')) continue;
         const payload = trimmed.slice(6);
         if (payload === '[DONE]') {
-          await callbacks.onDone(usage);
-          return;
+          continue;
         }
         try {
           const parsed = JSON.parse(payload);
@@ -219,14 +218,7 @@ export async function chatCompletionsStream(
           if (reasoningDelta) callbacks.onReasoning(reasoningDelta);
           const delta = choiceDelta?.content;
           if (delta) callbacks.onData(delta);
-          if (parsed.usage) {
-            usage = {
-              input_tokens: parsed.usage.prompt_tokens || parsed.usage.input_tokens || 0,
-              output_tokens: parsed.usage.completion_tokens || parsed.usage.output_tokens || 0,
-              model: parsed.model || usage.model,
-              cost: parsed.usage.cost || 0,
-            };
-          }
+          if (parsed.usage) usage = normalizeStreamUsage(parsed.usage, parsed.model || usage.model);
         } catch {
           // non-JSON SSE line, skip
         }
@@ -237,4 +229,25 @@ export async function chatCompletionsStream(
     if (signal?.aborted) return;
     callbacks.onError(err instanceof Error ? err.message : 'stream failed');
   }
+}
+
+function normalizeStreamUsage(raw: any, fallbackModel: string) {
+  const metricValue = (key: string): number => {
+    const metric = Array.isArray(raw?.metrics)
+      ? raw.metrics.find((item: any) => item?.key === key)
+      : undefined;
+    const value = Number(metric?.value);
+    return Number.isFinite(value) ? value : 0;
+  };
+
+  const promptTokens = Number(raw?.prompt_tokens ?? raw?.input_tokens);
+  const completionTokens = Number(raw?.completion_tokens ?? raw?.output_tokens);
+  const directCost = Number(raw?.cost ?? raw?.user_cost ?? raw?.account_cost);
+
+  return {
+    input_tokens: Number.isFinite(promptTokens) ? promptTokens : metricValue('input_tokens'),
+    output_tokens: Number.isFinite(completionTokens) ? completionTokens : metricValue('output_tokens'),
+    model: String(raw?.model || fallbackModel || ''),
+    cost: Number.isFinite(directCost) ? directCost : 0,
+  };
 }

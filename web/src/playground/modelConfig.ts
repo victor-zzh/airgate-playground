@@ -2,6 +2,36 @@ import type { ModelInfo } from './types';
 
 export const CHAT_MODEL_REGISTRY: ModelInfo[] = [
   {
+    id: 'claude-opus-4-8',
+    name: 'Claude Opus 4.8',
+    platform: 'claude',
+    input_price: 5,
+    output_price: 25,
+    context_window: 1000000,
+    max_output_tokens: 128000,
+    capabilities: ['chat', 'reasoning'],
+  },
+  {
+    id: 'claude-sonnet-4-5-20250929',
+    name: 'Claude Sonnet 4.5',
+    platform: 'claude',
+    input_price: 3,
+    output_price: 15,
+    context_window: 200000,
+    max_output_tokens: 64000,
+    capabilities: ['chat', 'reasoning'],
+  },
+  {
+    id: 'claude-haiku-4-5-20251001',
+    name: 'Claude Haiku 4.5',
+    platform: 'claude',
+    input_price: 1,
+    output_price: 5,
+    context_window: 200000,
+    max_output_tokens: 64000,
+    capabilities: ['chat'],
+  },
+  {
     id: 'gpt-5.5',
     name: 'GPT 5.5',
     platform: 'openai',

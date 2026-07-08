@@ -46,6 +46,8 @@ type hostForwardChunk struct {
 	StatusCode int
 	Headers    http.Header
 	Data       []byte
+	Usage      *sdk.Usage
+	UsageID    int
 }
 
 type hostAssetBytes struct {
@@ -118,6 +120,8 @@ func hostForwardStream(ctx context.Context, host sdk.Host, req hostForwardReques
 			StatusCode: intFromAny(firstPayloadValue(payload, "status_code", "status")),
 			Headers:    headerFromPayload(firstPayloadValue(payload, "headers")),
 			Data:       bytesFromPayload(firstPayloadValue(payload, "data")),
+			Usage:      usageFromPayload(firstPayloadValue(payload, "usage")),
+			UsageID:    intFromAny(firstPayloadValue(payload, "usage_id")),
 		}
 		if err := onChunk(chunk); err != nil {
 			return err

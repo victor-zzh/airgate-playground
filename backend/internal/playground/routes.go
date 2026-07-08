@@ -245,24 +245,24 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
 		return
 	}
-	var fields struct {
-		Model  string `json:"model"`
-		Stream *bool  `json:"stream"`
-	}
-	_ = json.Unmarshal(body, &fields)
-	if strings.TrimSpace(fields.Model) == "" {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "model required")
+	plan, err := compileChatForwardPlan(platform, body)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
 		return
 	}
+	var fields struct {
+		Stream *bool `json:"stream"`
+	}
+	_ = json.Unmarshal(body, &fields)
 	stream := fields.Stream == nil || *fields.Stream
 
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
-	headers.Set("X-Airgate-Platform", platform)
+	headers.Set("X-Airgate-Platform", plan.Platform)
 	logger.Debug("upstream_request_start",
-		sdk.LogFieldPlatform, platform,
-		sdk.LogFieldModel, fields.Model,
-		sdk.LogFieldPath, "/v1/chat/completions",
+		sdk.LogFieldPlatform, plan.Platform,
+		sdk.LogFieldModel, plan.Model,
+		sdk.LogFieldPath, plan.Path,
 		"stream", stream,
 	)
 	if !stream {
@@ -270,25 +270,25 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		resp, err := hostForward(ctx, p.host, hostForwardRequest{
 			UserID:  int64(parseUserID(r)),
 			GroupID: 0,
-			Model:   fields.Model,
+			Model:   plan.Model,
 			Method:  http.MethodPost,
-			Path:    "/v1/chat/completions",
+			Path:    plan.Path,
 			Headers: headers,
-			Body:    body,
+			Body:    plan.Body,
 			Stream:  false,
 		})
 		if err != nil {
 			logger.Warn("upstream_request_failed",
-				sdk.LogFieldPlatform, platform,
-				sdk.LogFieldModel, fields.Model,
+				sdk.LogFieldPlatform, plan.Platform,
+				sdk.LogFieldModel, plan.Model,
 				sdk.LogFieldError, err,
 			)
 			writeHostForwardError(w, err)
 			return
 		}
 		logger.Debug("upstream_request_completed",
-			sdk.LogFieldPlatform, platform,
-			sdk.LogFieldModel, fields.Model,
+			sdk.LogFieldPlatform, plan.Platform,
+			sdk.LogFieldModel, plan.Model,
 			sdk.LogFieldStatus, resp.StatusCode,
 		)
 		copyHeaders(w.Header(), resp.Headers)
@@ -300,27 +300,42 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusOK
 		}
 		w.WriteHeader(status)
-		_, _ = w.Write(resp.Body)
+		respBody := resp.Body
+		if plan.NormalizeJSON && status >= 200 && status < 300 {
+			if normalized, err := normalizeClaudeMessageResponse(respBody); err == nil {
+				respBody = normalized
+			}
+		}
+		_, _ = w.Write(respBody)
 		return
 	}
 	headers.Set("Accept", "text/event-stream")
 
 	committed := false
+	var finalUsage *sdk.Usage
+	var bridge *claudeSSEBridge
+	if plan.NormalizeSSE {
+		bridge = &claudeSSEBridge{w: w, model: plan.ResponseModel}
+	}
 	err = hostForwardStream(ctx, p.host, hostForwardRequest{
 		UserID:  int64(parseUserID(r)),
 		GroupID: 0,
-		Model:   fields.Model,
+		Model:   plan.Model,
 		Method:  http.MethodPost,
-		Path:    "/v1/chat/completions",
+		Path:    plan.Path,
 		Headers: headers,
-		Body:    body,
+		Body:    plan.Body,
 		Stream:  true,
 	}, func(chunk hostForwardChunk) error {
 		if chunk.Done {
+			finalUsage = chunk.Usage
+			if bridge != nil {
+				return bridge.Flush()
+			}
 			return nil
 		}
 		if !committed {
-			copyHeaders(w.Header(), chunk.Headers)
+			copyStreamingHeaders(w.Header(), chunk.Headers, plan.NormalizeSSE)
 			if w.Header().Get("Content-Type") == "" {
 				w.Header().Set("Content-Type", "text/event-stream")
 			}
@@ -332,8 +347,14 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			committed = true
 		}
 		if len(chunk.Data) > 0 {
-			if _, err := w.Write(chunk.Data); err != nil {
-				return err
+			if bridge != nil {
+				if _, err := bridge.Write(chunk.Data); err != nil {
+					return err
+				}
+			} else {
+				if _, err := w.Write(chunk.Data); err != nil {
+					return err
+				}
 			}
 		}
 		if flusher, ok := w.(http.Flusher); ok {
@@ -343,8 +364,8 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		logger.Warn("upstream_request_failed",
-			sdk.LogFieldPlatform, platform,
-			sdk.LogFieldModel, fields.Model,
+			sdk.LogFieldPlatform, plan.Platform,
+			sdk.LogFieldModel, plan.Model,
 			"stream", true,
 			sdk.LogFieldError, err,
 		)
@@ -356,10 +377,20 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logger.Debug("upstream_request_completed",
-		sdk.LogFieldPlatform, platform,
-		sdk.LogFieldModel, fields.Model,
+		sdk.LogFieldPlatform, plan.Platform,
+		sdk.LogFieldModel, plan.Model,
 		"stream", true,
 	)
+	if finalUsage != nil {
+		if plan.NormalizeSSE {
+			_ = writeOpenAIUsage(w, finalUsage, finalUsage.Model)
+		} else {
+			payload, _ := json.Marshal(map[string]any{"usage": finalUsage})
+			_, _ = w.Write([]byte("data: "))
+			_, _ = w.Write(payload)
+			_, _ = w.Write([]byte("\n\n"))
+		}
+	}
 }
 
 // ── Metadata Handlers ──

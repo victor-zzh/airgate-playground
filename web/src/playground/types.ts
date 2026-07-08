@@ -4,6 +4,7 @@ export type { ChatMessageContent, Conversation, Message, ReasoningEffort, UserIn
 
 export type SelectOption = { value: string; label: string };
 export type PendingImage = { id: string; name: string; url: string; file?: File };
+export type PendingFile = { id: string; name: string; content: string; size: number; type: string };
 export type PreviewImage = { url: string; alt: string };
 export type ImagePreviewState = { images: PreviewImage[]; index: number };
 export type BlobUrlRegistry = Map<string, string>;

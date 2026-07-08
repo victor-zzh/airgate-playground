@@ -1,0 +1,417 @@
+package playground
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+)
+
+const defaultClaudeMaxTokens = 4096
+
+type chatForwardPlan struct {
+	Platform      string
+	Model         string
+	Path          string
+	Body          []byte
+	NormalizeSSE  bool
+	NormalizeJSON bool
+	ResponseModel string
+}
+
+type openAIChatRequest struct {
+	Model           string        `json:"model"`
+	Messages        []chatMessage `json:"messages"`
+	Stream          *bool         `json:"stream,omitempty"`
+	ReasoningEffort string        `json:"reasoning_effort,omitempty"`
+}
+
+type chatMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+type claudeMessage struct {
+	Role    string        `json:"role"`
+	Content []claudeBlock `json:"content"`
+}
+
+type claudeBlock map[string]any
+
+type claudeMessagesRequest struct {
+	Model     string          `json:"model"`
+	MaxTokens int             `json:"max_tokens"`
+	System    []claudeBlock   `json:"system,omitempty"`
+	Messages  []claudeMessage `json:"messages"`
+	Stream    bool            `json:"stream"`
+}
+
+func compileChatForwardPlan(platform string, body []byte) (*chatForwardPlan, error) {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	if platform == "" {
+		return nil, fmt.Errorf("platform required")
+	}
+
+	var req openAIChatRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, fmt.Errorf("invalid request body")
+	}
+	req.Model = strings.TrimSpace(req.Model)
+	if req.Model == "" {
+		return nil, fmt.Errorf("model required")
+	}
+
+	switch platform {
+	case "openai":
+		return &chatForwardPlan{
+			Platform:      platform,
+			Model:         req.Model,
+			Path:          "/v1/chat/completions",
+			Body:          body,
+			ResponseModel: req.Model,
+		}, nil
+	case "claude", "anthropic":
+		compiled, err := compileClaudeMessagesBody(req)
+		if err != nil {
+			return nil, err
+		}
+		return &chatForwardPlan{
+			Platform:      "claude",
+			Model:         req.Model,
+			Path:          "/v1/messages",
+			Body:          compiled,
+			NormalizeSSE:  true,
+			NormalizeJSON: true,
+			ResponseModel: req.Model,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported platform: %s", platform)
+	}
+}
+
+func compileClaudeMessagesBody(req openAIChatRequest) ([]byte, error) {
+	out := claudeMessagesRequest{
+		Model:     req.Model,
+		MaxTokens: defaultClaudeMaxTokens,
+		Stream:    req.Stream == nil || *req.Stream,
+	}
+
+	for _, msg := range req.Messages {
+		role := strings.ToLower(strings.TrimSpace(msg.Role))
+		blocks := openAIContentToClaudeBlocks(msg.Content)
+		if len(blocks) == 0 {
+			continue
+		}
+
+		switch role {
+		case "system":
+			out.System = append(out.System, blocks...)
+		case "assistant":
+			out.Messages = append(out.Messages, claudeMessage{Role: "assistant", Content: blocks})
+		case "user", "tool":
+			out.Messages = append(out.Messages, claudeMessage{Role: "user", Content: blocks})
+		default:
+			out.Messages = append(out.Messages, claudeMessage{Role: "user", Content: blocks})
+		}
+	}
+
+	if len(out.Messages) == 0 {
+		return nil, fmt.Errorf("messages required")
+	}
+
+	return json.Marshal(out)
+}
+
+func openAIContentToClaudeBlocks(raw json.RawMessage) []claudeBlock {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return nil
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return nil
+		}
+		return []claudeBlock{{"type": "text", "text": text}}
+	}
+
+	var parts []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return nil
+	}
+
+	blocks := make([]claudeBlock, 0, len(parts))
+	for _, part := range parts {
+		var typ string
+		_ = json.Unmarshal(part["type"], &typ)
+		switch typ {
+		case "text":
+			var t string
+			_ = json.Unmarshal(part["text"], &t)
+			t = strings.TrimSpace(t)
+			if t != "" {
+				blocks = append(blocks, claudeBlock{"type": "text", "text": t})
+			}
+		case "image_url":
+			if block := openAIImagePartToClaudeBlock(part["image_url"]); block != nil {
+				blocks = append(blocks, block)
+			}
+		}
+	}
+	return blocks
+}
+
+func openAIImagePartToClaudeBlock(raw json.RawMessage) claudeBlock {
+	var payload struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	mediaType, data, ok := parseImageDataURL(payload.URL)
+	if !ok {
+		return nil
+	}
+	return claudeBlock{
+		"type": "image",
+		"source": map[string]any{
+			"type":       "base64",
+			"media_type": mediaType,
+			"data":       data,
+		},
+	}
+}
+
+func parseImageDataURL(value string) (mediaType string, data string, ok bool) {
+	const prefix = "data:"
+	if !strings.HasPrefix(value, prefix) {
+		return "", "", false
+	}
+	comma := strings.IndexByte(value, ',')
+	if comma < 0 {
+		return "", "", false
+	}
+	meta := value[len(prefix):comma]
+	if !strings.HasSuffix(strings.ToLower(meta), ";base64") {
+		return "", "", false
+	}
+	mediaType = strings.TrimSuffix(meta, ";base64")
+	if !strings.HasPrefix(mediaType, "image/") {
+		return "", "", false
+	}
+	data = value[comma+1:]
+	if data == "" {
+		return "", "", false
+	}
+	return mediaType, data, true
+}
+
+type sseWriter struct {
+	w io.Writer
+}
+
+func (s sseWriter) writeJSON(payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if _, err := s.w.Write([]byte("data: ")); err != nil {
+		return err
+	}
+	if _, err := s.w.Write(body); err != nil {
+		return err
+	}
+	_, err = s.w.Write([]byte("\n\n"))
+	return err
+}
+
+func writeOpenAIContentDelta(w io.Writer, model, text string) error {
+	if text == "" {
+		return nil
+	}
+	return sseWriter{w: w}.writeJSON(map[string]any{
+		"id":     "chatcmpl-playground",
+		"object": "chat.completion.chunk",
+		"model":  model,
+		"choices": []map[string]any{
+			{
+				"index": 0,
+				"delta": map[string]any{"content": text},
+			},
+		},
+	})
+}
+
+func writeOpenAIReasoningDelta(w io.Writer, model, text string) error {
+	if text == "" {
+		return nil
+	}
+	return sseWriter{w: w}.writeJSON(map[string]any{
+		"id":     "chatcmpl-playground",
+		"object": "chat.completion.chunk",
+		"model":  model,
+		"choices": []map[string]any{
+			{
+				"index": 0,
+				"delta": map[string]any{"reasoning_content": text},
+			},
+		},
+	})
+}
+
+func writeOpenAIUsage(w io.Writer, usage any, model string) error {
+	payload := map[string]any{
+		"object": "chat.completion.chunk",
+		"model":  model,
+		"usage":  usage,
+	}
+	return sseWriter{w: w}.writeJSON(payload)
+}
+
+func normalizeClaudeMessageResponse(body []byte) ([]byte, error) {
+	var resp struct {
+		ID         string `json:"id"`
+		Model      string `json:"model"`
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+		Error any `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return body, nil
+	}
+	if resp.Error != nil {
+		return body, nil
+	}
+	var text strings.Builder
+	for _, block := range resp.Content {
+		if block.Type == "text" && block.Text != "" {
+			text.WriteString(block.Text)
+		}
+	}
+	model := resp.Model
+	if model == "" {
+		model = "claude"
+	}
+	id := resp.ID
+	if id == "" {
+		id = "chatcmpl-playground"
+	}
+	finishReason := resp.StopReason
+	if finishReason == "" {
+		finishReason = "stop"
+	}
+	out := map[string]any{
+		"id":      id,
+		"object":  "chat.completion",
+		"model":   model,
+		"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": text.String()}, "finish_reason": finishReason}},
+		"usage": map[string]any{
+			"prompt_tokens":     resp.Usage.InputTokens,
+			"completion_tokens": resp.Usage.OutputTokens,
+			"total_tokens":      resp.Usage.InputTokens + resp.Usage.OutputTokens,
+		},
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return body, nil
+	}
+	return encoded, nil
+}
+
+type claudeSSEBridge struct {
+	w     io.Writer
+	model string
+	buf   string
+}
+
+func (b *claudeSSEBridge) Write(data []byte) (int, error) {
+	b.buf += strings.ReplaceAll(string(data), "\r\n", "\n")
+	for {
+		idx := strings.Index(b.buf, "\n\n")
+		if idx < 0 {
+			break
+		}
+		event := b.buf[:idx]
+		b.buf = b.buf[idx+2:]
+		if err := b.handleEvent(event); err != nil {
+			return 0, err
+		}
+	}
+	return len(data), nil
+}
+
+func (b *claudeSSEBridge) Flush() error {
+	if strings.TrimSpace(b.buf) == "" {
+		b.buf = ""
+		return nil
+	}
+	event := b.buf
+	b.buf = ""
+	return b.handleEvent(event)
+}
+
+func (b *claudeSSEBridge) handleEvent(event string) error {
+	for _, line := range strings.Split(event, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var data map[string]any
+		if err := json.Unmarshal([]byte(payload), &data); err != nil {
+			continue
+		}
+		if data["error"] != nil {
+			return sseWriter{w: b.w}.writeJSON(data)
+		}
+		if model, ok := data["model"].(string); ok && model != "" {
+			b.model = model
+		}
+		switch data["type"] {
+		case "content_block_delta":
+			delta, _ := data["delta"].(map[string]any)
+			switch delta["type"] {
+			case "text_delta":
+				if text, _ := delta["text"].(string); text != "" {
+					if err := writeOpenAIContentDelta(b.w, b.model, text); err != nil {
+						return err
+					}
+				}
+			case "thinking_delta":
+				if text, _ := delta["thinking"].(string); text != "" {
+					if err := writeOpenAIReasoningDelta(b.w, b.model, text); err != nil {
+						return err
+					}
+				}
+			}
+		case "message_delta":
+			if usage, ok := data["usage"]; ok {
+				if err := writeOpenAIUsage(b.w, usage, b.model); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func copyStreamingHeaders(dst, src http.Header, normalizeSSE bool) {
+	copyHeaders(dst, src)
+	if normalizeSSE {
+		dst.Set("Content-Type", "text/event-stream")
+	}
+}

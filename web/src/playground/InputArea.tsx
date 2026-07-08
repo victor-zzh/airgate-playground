@@ -13,10 +13,12 @@ export function InputArea() {
     handlePaste,
     handleKeyDown,
     pendingImages,
+    pendingFiles,
     removePendingImage,
+    removePendingFile,
     inputRef,
     fileInputRef,
-    handleImageChange,
+    handleAttachmentChange,
     renderNativeSelect,
     selectedModel,
     modelOptions,
@@ -40,7 +42,7 @@ export function InputArea() {
         ...(isMobile ? styles.inputWrapperMobile : null),
         ...(isActiveConversationStreaming ? styles.inputWrapperStreaming : null),
       }} className="pg-input-wrapper">
-        {pendingImages.length > 0 && (
+        {(pendingImages.length > 0 || pendingFiles.length > 0) && (
           <div style={styles.imagePreviewList}>
             {pendingImages.map(image => (
               <div
@@ -66,6 +68,38 @@ export function InputArea() {
                 </button>
               </div>
             ))}
+            {pendingFiles.map(file => (
+              <div
+                key={file.id}
+                style={{
+                  ...styles.filePreviewItem,
+                  ...(isActiveConversationStreaming ? { cursor: 'default', opacity: 0.6 } : null),
+                }}
+              >
+                <div style={styles.filePreviewIcon} aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6" />
+                    <path d="M8 13h8" />
+                    <path d="M8 17h6" />
+                  </svg>
+                </div>
+                <div style={styles.filePreviewName} title={file.name}>{file.name}</div>
+                <button
+                  type="button"
+                  style={styles.removeImageBtn}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    removePendingFile(file.id);
+                  }}
+                  aria-label={`Remove ${file.name}`}
+                  disabled={isActiveConversationStreaming}
+                >
+                  &times;
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -84,10 +118,10 @@ export function InputArea() {
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept="image/*,.txt,.md,.markdown,.csv,.json,.jsonl,.log,.xml,.yaml,.yml,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.kt,.swift,.sql,.html,.css,text/*"
           multiple
           style={styles.fileInput}
-          onChange={handleImageChange}
+          onChange={handleAttachmentChange}
           disabled={isActiveConversationStreaming}
         />
 
@@ -159,14 +193,12 @@ export function InputArea() {
               onMouseDown={event => event.preventDefault()}
               onClick={triggerImagePicker}
               disabled={isActiveConversationStreaming}
-              title={t('playground.attach_images')}
+              title={t('playground.attach_files', { defaultValue: 'Attach files' })}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <circle cx="8.5" cy="8.5" r="1.5" />
-                <path d="M21 15l-5-5L5 21" />
+                <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
-              {t('playground.image')}
+              {t('playground.file', { defaultValue: 'File' })}
             </button>
 
             {isActiveConversationStreaming ? (

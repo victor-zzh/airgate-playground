@@ -11,3 +11,4 @@ const MARKDOWN_IMAGE_URL_PATTERN = String.raw`data:image\/(?:png|jpeg|jpg|webp|g
 export const IMAGE_MARKDOWN_RE = new RegExp(String.raw`!\[[^\]]*\]\((${MARKDOWN_IMAGE_URL_PATTERN})\)`, 'g');
 export const IMAGE_MARKDOWN_ITEM_RE = new RegExp(String.raw`!\[([^\]]*)\]\((${MARKDOWN_IMAGE_URL_PATTERN})\)`, 'g');
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const MAX_TEXT_FILE_BYTES = 512 * 1024;
