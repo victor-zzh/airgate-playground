@@ -95,6 +95,56 @@ func TestCompileChatForwardPlanClaudeCompilesMessagesRequest(t *testing.T) {
 	}
 }
 
+func TestCompileChatForwardPlanClaudeKeepsConversationTurnsAndFileText(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-haiku-4-5-20251001",
+		"messages":[
+			{"role":"user","content":"OpenAI turn"},
+			{"role":"assistant","content":"OpenAI answer"},
+			{"role":"user","content":[
+				{"type":"text","text":"Analyze attached content.\n\n<file name=\"report.md\" type=\"text/markdown\" size=\"18\">\n# Revenue\n42\n</file>"}
+			]}
+		],
+		"stream":false,
+		"stream_options":{"include_usage":true},
+		"reasoning_effort":"high"
+	}`)
+
+	plan, err := compileChatForwardPlan("anthropic", body)
+	if err != nil {
+		t.Fatalf("compileChatForwardPlan() error = %v", err)
+	}
+	if plan.Platform != "claude" || plan.Path != "/v1/messages" {
+		t.Fatalf("platform/path = %s %s, want claude /v1/messages", plan.Platform, plan.Path)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(plan.Body, &got); err != nil {
+		t.Fatalf("compiled body is invalid JSON: %v\n%s", err, plan.Body)
+	}
+	if got["stream"] != false {
+		t.Fatalf("stream = %v, want false", got["stream"])
+	}
+	if _, ok := got["stream_options"]; ok {
+		t.Fatalf("stream_options should not be forwarded to Claude body: %s", plan.Body)
+	}
+	if _, ok := got["reasoning_effort"]; ok {
+		t.Fatalf("reasoning_effort should not be forwarded to Claude body: %s", plan.Body)
+	}
+	messages := got["messages"].([]any)
+	if len(messages) != 3 {
+		t.Fatalf("messages len = %d, want 3", len(messages))
+	}
+	if role := messages[1].(map[string]any)["role"]; role != "assistant" {
+		t.Fatalf("second role = %v, want assistant", role)
+	}
+	lastContent := messages[2].(map[string]any)["content"].([]any)
+	text := lastContent[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, `<file name="report.md"`) || !strings.Contains(text, "# Revenue") {
+		t.Fatalf("last text block = %q, want file content", text)
+	}
+}
+
 func TestCompileChatForwardPlanClaudeRejectsEmptyMessages(t *testing.T) {
 	_, err := compileChatForwardPlan("claude", []byte(`{"model":"claude-sonnet-4-5-20250929","messages":[]}`))
 	if err == nil || !strings.Contains(err.Error(), "messages required") {
