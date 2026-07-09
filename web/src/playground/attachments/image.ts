@@ -44,6 +44,27 @@ export function scaledDimensions(width: number, height: number, maxEdge: number)
   };
 }
 
+// 按魔数嗅探真实图片类型（纯函数可测）。浏览器 file.type 只看扩展名，
+// 微信导出的 .jpg 常是 PNG 字节，错标 media_type 会被严格上游拒绝。
+export function sniffImageBytes(head: Uint8Array): string | null {
+  if (head.length < 12) return null;
+  if (head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) return 'image/png';
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'image/jpeg';
+  if (head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x38) return 'image/gif';
+  const ascii = (start: number, end: number) => String.fromCharCode(...head.slice(start, end));
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+
+async function sniffImageFileType(file: File): Promise<string> {
+  try {
+    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    return sniffImageBytes(head) || file.type;
+  } catch {
+    return file.type;
+  }
+}
+
 // ── 浏览器管线 ──
 
 type DecodedImage = {
@@ -138,6 +159,8 @@ export async function processImageFile(file: File): Promise<CompressedImageResul
   }
 
   const warnings: AttachmentIssue[] = [];
+  // 以字节嗅探的真实类型为准，file.type（扩展名推断）只作回退
+  const actualType = await sniffImageFileType(file);
 
   const decoded = await decodeImage(file);
   try {
@@ -148,9 +171,10 @@ export async function processImageFile(file: File): Promise<CompressedImageResul
       });
     }
 
-    if (shouldPassthrough({ sizeBytes: file.size, width: decoded.width, height: decoded.height, type: file.type })) {
+    if (shouldPassthrough({ sizeBytes: file.size, width: decoded.width, height: decoded.height, type: actualType })) {
+      const source = actualType === file.type ? file : new Blob([file], { type: actualType });
       return {
-        url: await blobToDataURL(file),
+        url: await blobToDataURL(source),
         originalBytes: file.size,
         finalBytes: file.size,
         compressed: false,
@@ -158,7 +182,7 @@ export async function processImageFile(file: File): Promise<CompressedImageResul
       };
     }
 
-    if (file.type === 'image/gif') {
+    if (actualType === 'image/gif') {
       warnings.push({ code: 'attachment.gif_flattened' });
     }
 

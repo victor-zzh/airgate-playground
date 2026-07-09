@@ -2,6 +2,7 @@ package playground
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -213,5 +214,50 @@ func TestWriteOpenAIUsageAcceptsSDKUsage(t *testing.T) {
 	}
 	if got := out.String(); !strings.Contains(got, `"model":"claude-opus-4-8"`) || !strings.Contains(got, `"usage"`) {
 		t.Fatalf("output = %s", got)
+	}
+}
+
+func TestSniffImageMediaTypeCorrectsMislabeledImages(t *testing.T) {
+	t.Parallel()
+
+	pngHead := append([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}, make([]byte, 8)...)
+	jpegHead := append([]byte{0xFF, 0xD8, 0xFF, 0xE0}, make([]byte, 8)...)
+	webpHead := append([]byte("RIFF\x00\x00\x00\x00WEBP"), make([]byte, 4)...)
+
+	cases := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{"png", pngHead, "image/png"},
+		{"jpeg", jpegHead, "image/jpeg"},
+		{"webp", webpHead, "image/webp"},
+		{"unknown", []byte("not an image, just text data"), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sniffImageMediaType(base64.StdEncoding.EncodeToString(tc.data))
+			if got != tc.want {
+				t.Fatalf("sniffImageMediaType(%s) = %q, want %q", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOpenAIImagePartCorrectsMediaTypeFromBytes(t *testing.T) {
+	t.Parallel()
+
+	// 微信导出场景：.jpg 扩展名声明 image/jpeg，实际字节是 PNG
+	pngBytes := append([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}, make([]byte, 16)...)
+	dataURL := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(pngBytes)
+	raw, _ := json.Marshal(map[string]string{"url": dataURL})
+
+	block := openAIImagePartToClaudeBlock(raw)
+	if block == nil {
+		t.Fatal("expected image block")
+	}
+	source := block["source"].(map[string]any)
+	if source["media_type"] != "image/png" {
+		t.Fatalf("media_type = %v, want image/png (sniffed from bytes)", source["media_type"])
 	}
 }

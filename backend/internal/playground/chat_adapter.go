@@ -2,6 +2,7 @@ package playground
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -176,6 +177,12 @@ func openAIImagePartToClaudeBlock(raw json.RawMessage) claudeBlock {
 	if !ok {
 		return nil
 	}
+	// 声明类型与字节不符时以字节为准：微信导出的 .jpg 常是 PNG 字节，
+	// 浏览器 file.type 只看扩展名，错标的 media_type 会被严格上游拒绝
+	// （Could not process image）。嗅探同时治好历史消息里已存的错标图。
+	if sniffed := sniffImageMediaType(data); sniffed != "" && sniffed != mediaType {
+		mediaType = sniffed
+	}
 	return claudeBlock{
 		"type": "image",
 		"source": map[string]any{
@@ -184,6 +191,28 @@ func openAIImagePartToClaudeBlock(raw json.RawMessage) claudeBlock {
 			"data":       data,
 		},
 	}
+}
+
+// sniffImageMediaType 解出 base64 头部字节，按魔数识别真实图片类型；识别不了返回空。
+func sniffImageMediaType(b64 string) string {
+	if len(b64) < 16 {
+		return ""
+	}
+	head, err := base64.StdEncoding.DecodeString(b64[:16])
+	if err != nil || len(head) < 12 {
+		return ""
+	}
+	switch {
+	case bytes.HasPrefix(head, []byte{0x89, 'P', 'N', 'G'}):
+		return "image/png"
+	case bytes.HasPrefix(head, []byte{0xFF, 0xD8, 0xFF}):
+		return "image/jpeg"
+	case bytes.HasPrefix(head, []byte("GIF8")):
+		return "image/gif"
+	case bytes.HasPrefix(head, []byte("RIFF")) && bytes.Equal(head[8:12], []byte("WEBP")):
+		return "image/webp"
+	}
+	return ""
 }
 
 func parseImageDataURL(value string) (mediaType string, data string, ok bool) {

@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { effectiveLadder, scaledDimensions, shouldPassthrough } from '../image';
+import { effectiveLadder, scaledDimensions, shouldPassthrough, sniffImageBytes } from '../image';
 import { IMAGE_TARGET_BYTES } from '../limits';
+
+describe('sniffImageBytes', () => {
+  it('detects real formats regardless of extension-derived type', () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    const gif = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0, 0, 0, 0, 0, 0]);
+    const webp = new Uint8Array([...'RIFF'.split('').map(c => c.charCodeAt(0)), 0, 0, 0, 0, ...'WEBP'.split('').map(c => c.charCodeAt(0))]);
+    expect(sniffImageBytes(png)).toBe('image/png');
+    expect(sniffImageBytes(jpeg)).toBe('image/jpeg');
+    expect(sniffImageBytes(gif)).toBe('image/gif');
+    expect(sniffImageBytes(webp)).toBe('image/webp');
+  });
+
+  it('returns null for unknown or short data', () => {
+    expect(sniffImageBytes(new Uint8Array([1, 2, 3]))).toBe(null);
+    expect(sniffImageBytes(new TextEncoder().encode('plain text data here'))).toBe(null);
+  });
+});
 
 describe('shouldPassthrough', () => {
   it('passes small model-friendly images untouched', () => {
