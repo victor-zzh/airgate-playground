@@ -28,6 +28,7 @@ func BuildPluginInfo() sdk.PluginInfo {
 		Capabilities: []sdk.Capability{
 			sdk.CapabilityForHostMethod(hostMethodGatewayForward),
 			sdk.CapabilityForHostMethod(hostMethodUsersGet),
+			sdk.CapabilityForHostMethod(hostMethodModelsList),
 			sdk.CapabilityForHostMethod(hostMethodAssetsStore),
 			sdk.CapabilityForHostMethod(hostMethodAssetsGetURL),
 			sdk.CapabilityForHostMethod(hostMethodAssetsGetBytes),

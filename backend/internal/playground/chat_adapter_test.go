@@ -71,8 +71,13 @@ func TestCompileChatForwardPlanClaudeCompilesMessagesRequest(t *testing.T) {
 	if got["stream"] != true {
 		t.Fatalf("stream = %v, want true", got["stream"])
 	}
-	if got["max_tokens"] != float64(defaultClaudeMaxTokens) {
-		t.Fatalf("max_tokens = %v", got["max_tokens"])
+	// reasoning_effort=medium → thinking budget 8192，max_tokens 同步抬高
+	thinking, ok := got["thinking"].(map[string]any)
+	if !ok || thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(8192) {
+		t.Fatalf("thinking = %v, want enabled/8192", got["thinking"])
+	}
+	if got["max_tokens"] != float64(8192+defaultClaudeMaxTokens) {
+		t.Fatalf("max_tokens = %v, want budget+default", got["max_tokens"])
 	}
 	system := got["system"].([]any)
 	if system[0].(map[string]any)["text"] != "You are concise." {
@@ -259,5 +264,50 @@ func TestOpenAIImagePartCorrectsMediaTypeFromBytes(t *testing.T) {
 	source := block["source"].(map[string]any)
 	if source["media_type"] != "image/png" {
 		t.Fatalf("media_type = %v, want image/png (sniffed from bytes)", source["media_type"])
+	}
+}
+
+func TestCompileClaudeThinkingByReasoningEffort(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		effort     string
+		wantBudget int // 0 表示不带 thinking
+	}{
+		{"minimal", 0},
+		{"", 0},
+		{"low", 2048},
+		{"medium", 8192},
+		{"high", 16384},
+		{"xhigh", 32768},
+	}
+	for _, tc := range cases {
+		t.Run("effort_"+tc.effort, func(t *testing.T) {
+			body := []byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}],"stream":true,"reasoning_effort":"` + tc.effort + `"}`)
+			plan, err := compileChatForwardPlan("claude", body)
+			if err != nil {
+				t.Fatalf("compile error: %v", err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(plan.Body, &got); err != nil {
+				t.Fatal(err)
+			}
+			thinking, hasThinking := got["thinking"].(map[string]any)
+			if tc.wantBudget == 0 {
+				if hasThinking {
+					t.Fatalf("effort %q should not enable thinking, got %v", tc.effort, thinking)
+				}
+				if got["max_tokens"] != float64(defaultClaudeMaxTokens) {
+					t.Fatalf("max_tokens = %v, want default", got["max_tokens"])
+				}
+				return
+			}
+			if !hasThinking || thinking["budget_tokens"] != float64(tc.wantBudget) {
+				t.Fatalf("effort %q thinking = %v, want budget %d", tc.effort, got["thinking"], tc.wantBudget)
+			}
+			if got["max_tokens"] != float64(tc.wantBudget+defaultClaudeMaxTokens) {
+				t.Fatalf("max_tokens = %v, want budget+default", got["max_tokens"])
+			}
+		})
 	}
 }

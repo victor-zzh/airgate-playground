@@ -54,6 +54,7 @@ func (p *Plugin) RegisterRoutes(r sdk.RouteRegistrar) {
 
 	// Metadata
 	r.Handle(http.MethodGet, "/user/info", p.requireUser(p.handleGetUserInfo))
+	r.Handle(http.MethodGet, "/models", p.requireUser(p.handleListModels))
 }
 
 // ── Middleware ──
@@ -428,6 +429,24 @@ func (p *Plugin) handleGetUserInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// chatModelPlatforms AI Chat 支持的平台，顺序即前端下拉的分组顺序。
+// 模型清单来自各网关插件的注册表（claude＝Max 号池网关声明的模型；
+// 转发始终走用户 API Key 所属分组，不会因选择模型改路由到别的分组）。
+var chatModelPlatforms = []string{"claude", "openai"}
+
+func (p *Plugin) handleListModels(w http.ResponseWriter, r *http.Request) {
+	models := make([]hostModelInfo, 0, 16)
+	for _, platform := range chatModelPlatforms {
+		items, err := hostListModels(r.Context(), p.host, platform)
+		if err != nil {
+			// 单平台失败不阻断（如插件未装）；前端拿到空列表时回退硬编码
+			continue
+		}
+		models = append(models, items...)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
 // ── Helpers ──

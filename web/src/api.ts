@@ -124,8 +124,20 @@ export interface ChatCompletionCallbacks {
 
 // ── API ──
 
+export interface ChatModelItem {
+  id: string;
+  name: string;
+  platform: string;
+  context_window: number;
+  max_output_tokens: number;
+  capabilities: string[] | null;
+}
+
 export const api = {
   listConversations: () => request<Conversation[]>('GET', '/conversations'),
+
+  // 动态模型目录：来自各网关插件注册表（claude＝Max 号池网关声明的模型）
+  listChatModels: () => request<{ models: ChatModelItem[] }>('GET', '/models'),
 
   createConversation: (data: { title?: string; group_id?: number; platform?: string; model?: string }) =>
     request<Conversation>('POST', '/conversations', data),

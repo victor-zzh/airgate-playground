@@ -16,11 +16,60 @@ import (
 const (
 	hostMethodGatewayForward = "gateway.forward"
 	hostMethodUsersGet       = "users.get"
+	hostMethodModelsList     = "models.list"
 	hostMethodAssetsStore    = "assets.store"
 	hostMethodAssetsGetURL   = "assets.get_url"
 	hostMethodAssetsGetBytes = "assets.get_bytes"
 	hostMethodAssetsDelete   = "assets.delete"
 )
+
+// hostModelInfo 是 models.list 返回的单个模型条目（转发给前端选择器）。
+type hostModelInfo struct {
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	Platform        string   `json:"platform"`
+	ContextWindow   int64    `json:"context_window"`
+	MaxOutputTokens int64    `json:"max_output_tokens"`
+	Capabilities    []string `json:"capabilities"`
+}
+
+// hostListModels 拉取指定平台的模型列表（来源＝对应网关插件声明的注册表 + 后台目录覆盖层）。
+func hostListModels(ctx context.Context, host sdk.Host, platform string) ([]hostModelInfo, error) {
+	result, err := hostInvoke(ctx, host, hostMethodModelsList, map[string]interface{}{
+		"platform": platform,
+	})
+	if err != nil {
+		return nil, err
+	}
+	rawItems, _ := result["models"].([]interface{})
+	models := make([]hostModelInfo, 0, len(rawItems))
+	for _, raw := range rawItems {
+		item, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		info := hostModelInfo{Platform: platform}
+		info.ID, _ = item["id"].(string)
+		info.Name, _ = item["name"].(string)
+		if v, ok := item["context_window"].(float64); ok {
+			info.ContextWindow = int64(v)
+		}
+		if v, ok := item["max_output_tokens"].(float64); ok {
+			info.MaxOutputTokens = int64(v)
+		}
+		if caps, ok := item["capabilities"].([]interface{}); ok {
+			for _, c := range caps {
+				if s, ok := c.(string); ok {
+					info.Capabilities = append(info.Capabilities, s)
+				}
+			}
+		}
+		if info.ID != "" {
+			models = append(models, info)
+		}
+	}
+	return models, nil
+}
 
 type hostForwardRequest struct {
 	UserID  int64

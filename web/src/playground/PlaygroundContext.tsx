@@ -35,6 +35,7 @@ import {
 } from './constants';
 import {
   copyMessageContent,
+  dataUrlToBlob,
   defaultModelOptionValue,
   getStoredActiveConversationId,
   getStoredSelectedModel,
@@ -83,6 +84,7 @@ export interface PlaygroundContextValue {
   selectedPlatform: string;
   selectedModelSupportsReasoning: boolean;
   modelOptions: SelectOption[];
+  isDraggingFiles: boolean;
 
   input: string;
   setInput: React.Dispatch<React.SetStateAction<string>>;
@@ -163,11 +165,12 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [isProcessingAttachments, setIsProcessingAttachments] = useState(false);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  // 模型目录：优先后端动态目录（各网关插件注册表），拉取失败回退硬编码
+  const [chatModels, setChatModels] = useState<ModelInfo[]>(CHAT_MODEL_REGISTRY);
   const [selectedModel, setSelectedModel] = useState(() => {
     const storedModel = getStoredSelectedModel();
-    return CHAT_MODEL_REGISTRY.some(model => modelOptionValue(model) === storedModel)
-      ? storedModel
-      : defaultModelOptionValue(CHAT_MODEL_REGISTRY);
+    return storedModel || defaultModelOptionValue(CHAT_MODEL_REGISTRY);
   });
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('medium');
   const [thinkingVisible, setThinkingVisible] = useState(() => readLocalStorageValue(THINKING_VISIBLE_STORAGE_KEY) !== '0');
@@ -206,19 +209,40 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const selectedModelInfo = useMemo(
-    () => CHAT_MODEL_REGISTRY.find(item => modelOptionValue(item) === selectedModel),
-    [selectedModel],
+    () => chatModels.find(item => modelOptionValue(item) === selectedModel),
+    [chatModels, selectedModel],
   );
   const selectedModelID = selectedModelInfo?.id || '';
   const selectedPlatform = selectedModelInfo?.platform || '';
   const selectedModelSupportsReasoning = supportsReasoning(selectedModelInfo);
 
   const modelOptions = useMemo(() => {
-    return CHAT_MODEL_REGISTRY
+    return chatModels
       .map(model => ({
         value: modelOptionValue(model),
         label: `${model.name || model.id} · ${model.platform}`,
       }));
+  }, [chatModels]);
+
+  // 拉取动态模型目录；当前选中模型不在新目录里时回退默认
+  useEffect(() => {
+    api.listChatModels().then(result => {
+      const items: ModelInfo[] = (result.models || []).map(item => ({
+        id: item.id,
+        name: item.name || item.id,
+        platform: item.platform,
+        input_price: 0,
+        output_price: 0,
+        context_window: item.context_window,
+        max_output_tokens: item.max_output_tokens,
+        capabilities: item.capabilities || [],
+      }));
+      if (!items.length) return;
+      setChatModels(items);
+      setSelectedModel(current => (
+        items.some(model => modelOptionValue(model) === current) ? current : defaultModelOptionValue(items)
+      ));
+    }).catch(() => {});
   }, []);
 
   const sidebarConversations = useMemo(
@@ -272,12 +296,12 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   }, [activeId, conversationsLoaded]);
 
   useEffect(() => {
-    if (selectedModel && CHAT_MODEL_REGISTRY.some(item => modelOptionValue(item) === selectedModel)) {
+    if (selectedModel && chatModels.some(item => modelOptionValue(item) === selectedModel)) {
       writeLocalStorageValue(SELECTED_MODEL_STORAGE_KEY, selectedModel);
     } else {
       writeLocalStorageValue(SELECTED_MODEL_STORAGE_KEY, null);
     }
-  }, [selectedModel]);
+  }, [chatModels, selectedModel]);
 
   useEffect(() => {
     writeLocalStorageValue(THINKING_VISIBLE_STORAGE_KEY, thinkingVisible ? null : '0');
@@ -732,10 +756,78 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
 
   const handlePaste = useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(event.clipboardData.files || []);
-    if (!files.length) return;
+    if (files.length) {
+      event.preventDefault();
+      void addAttachments(files);
+      return;
+    }
+
+    // 图文消息复制回填：我们的复制会写 text/html（图片内联 data URL），
+    // 粘回输入框时把图片还原成附件、文字进输入框。
+    const html = event.clipboardData.getData('text/html');
+    if (!html || !html.includes('data:image/')) return;
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const imageFiles: File[] = [];
+    doc.querySelectorAll('img').forEach((img, index) => {
+      const src = img.getAttribute('src') || '';
+      if (!src.startsWith('data:image/')) return;
+      const blob = dataUrlToBlob(src);
+      if (!blob) return;
+      const ext = (blob.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
+      imageFiles.push(new File([blob], `pasted-image-${index + 1}.${ext}`, { type: blob.type }));
+    });
+    if (!imageFiles.length) return;
+
     event.preventDefault();
-    void addAttachments(files);
+    const text = event.clipboardData.getData('text/plain').replace(/\[Image\]/g, '').trim();
+    if (text) setInput(prev => (prev ? `${prev}\n${text}` : text));
+    void addAttachments(imageFiles);
   }, [addAttachments]);
+
+  // 拖拽上传：window 级监听（dragenter 计数防子元素抖动），仅在有活跃会话时接收
+  const addAttachmentsRef = useRef(addAttachments);
+  useEffect(() => {
+    addAttachmentsRef.current = addAttachments;
+  }, [addAttachments]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let depth = 0;
+    const hasFiles = (event: DragEvent) => Boolean(
+      event.dataTransfer && Array.from(event.dataTransfer.types).includes('Files'),
+    );
+    const onDragEnter = (event: DragEvent) => {
+      if (!hasFiles(event) || !activeIdRef.current) return;
+      depth += 1;
+      setIsDraggingFiles(true);
+    };
+    const onDragOver = (event: DragEvent) => {
+      if (hasFiles(event) && activeIdRef.current) event.preventDefault();
+    };
+    const onDragLeave = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setIsDraggingFiles(false);
+    };
+    const onDrop = (event: DragEvent) => {
+      depth = 0;
+      setIsDraggingFiles(false);
+      if (!hasFiles(event) || !activeIdRef.current) return;
+      event.preventDefault();
+      const files = Array.from(event.dataTransfer?.files || []);
+      if (files.length) void addAttachmentsRef.current(files);
+    };
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, []);
 
   const removePendingImage = useCallback((id: string) => {
     setPendingImages(prev => prev.filter(item => item.id !== id));
@@ -835,6 +927,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     selectedPlatform,
     selectedModelSupportsReasoning,
     modelOptions,
+    isDraggingFiles,
     input,
     setInput,
     pendingImages,

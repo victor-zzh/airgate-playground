@@ -32,6 +32,7 @@ export function ChatView() {
     handleMessageCopy,
     showImagePreview,
     interactiveMessageOptions,
+    isDraggingFiles,
   } = usePlayground();
 
   const renderCopyButton = (content: string, label = 'Copy message', preventToggle = false, buttonStyle: CSSProperties = {}) => (
@@ -235,6 +236,35 @@ export function ChatView() {
       </div>
 
       {activeId && <InputArea />}
+
+      {isDraggingFiles && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 60,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0, 0, 0, 0.45)',
+            pointerEvents: 'none',
+          }}
+        >
+          <div
+            style={{
+              padding: '18px 30px',
+              borderRadius: 12,
+              border: '2px dashed rgba(255, 255, 255, 0.75)',
+              color: '#fff',
+              fontSize: 15,
+              fontWeight: 600,
+              background: 'rgba(0, 0, 0, 0.35)',
+            }}
+          >
+            {t('playground.drop_to_attach', { defaultValue: '松开以添加附件' })}
+          </div>
+        </div>
+      )}
     </>
   );
 }

@@ -47,6 +47,21 @@ type claudeMessagesRequest struct {
 	System    []claudeBlock   `json:"system,omitempty"`
 	Messages  []claudeMessage `json:"messages"`
 	Stream    bool            `json:"stream"`
+	Thinking  *claudeThinking `json:"thinking,omitempty"`
+}
+
+type claudeThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+// reasoning_effort → Anthropic extended thinking 预算。minimal 关闭思考。
+// max_tokens 必须大于 budget_tokens，编译时同步抬高。
+var claudeThinkingBudgets = map[string]int{
+	"low":    2048,
+	"medium": 8192,
+	"high":   16384,
+	"xhigh":  32768,
 }
 
 func compileChatForwardPlan(platform string, body []byte) (*chatForwardPlan, error) {
@@ -97,6 +112,10 @@ func compileClaudeMessagesBody(req openAIChatRequest) ([]byte, error) {
 		Model:     req.Model,
 		MaxTokens: defaultClaudeMaxTokens,
 		Stream:    req.Stream == nil || *req.Stream,
+	}
+	if budget, ok := claudeThinkingBudgets[strings.ToLower(strings.TrimSpace(req.ReasoningEffort))]; ok {
+		out.Thinking = &claudeThinking{Type: "enabled", BudgetTokens: budget}
+		out.MaxTokens = budget + defaultClaudeMaxTokens
 	}
 
 	for _, msg := range req.Messages {
