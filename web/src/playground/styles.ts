@@ -801,7 +801,11 @@ export const styles: Record<string, CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     gap: 8,
-    margin: '8px 28px',
+    // 与消息栏同列宽（messageRow maxWidth 768 - 两侧 24px 内边距），居中不横贯全屏
+    width: 'calc(100% - 56px)',
+    maxWidth: 720,
+    boxSizing: 'border-box',
+    margin: '8px auto',
     padding: '10px 14px',
     borderRadius: cssVar('radiusSm'),
     background: cssVar('dangerSubtle'),
@@ -811,7 +815,8 @@ export const styles: Record<string, CSSProperties> = {
     borderColor: 'rgba(251, 113, 133, 0.2)',
   },
   errorBarMobile: {
-    margin: '8px 14px',
+    width: 'calc(100% - 28px)',
+    margin: '8px auto',
   },
   errorMessage: {
     flex: 1,

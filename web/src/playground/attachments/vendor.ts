@@ -3,6 +3,12 @@
 
 const VENDOR_ASSET_BASE = '/plugins/airgate-playground/assets/vendor';
 
+// 插件 index.js 由 core 经 Blob URL 动态加载（plugin-loader.ts），blob 模块内
+// 路径型 import specifier 无法解析（blob: 不是层级 URL），必须拼成带 origin 的完整 URL。
+function vendorAssetUrl(path: string): string {
+  return new URL(`${VENDOR_ASSET_BASE}/${path}`, window.location.origin).href;
+}
+
 // ── SheetJS（UMD，挂 window.XLSX）──
 
 export interface XlsxRuntime {
@@ -33,7 +39,7 @@ export function loadXlsxRuntime(): Promise<XlsxRuntime> {
   xlsxPromise = new Promise<XlsxRuntime>((resolve, reject) => {
     const script = document.createElement('script');
     script.async = true;
-    script.src = `${VENDOR_ASSET_BASE}/xlsx/xlsx.full.min.js`;
+    script.src = vendorAssetUrl('xlsx/xlsx.full.min.js');
     script.onload = () => {
       if (window.XLSX) resolve(window.XLSX);
       else {
@@ -82,9 +88,9 @@ export function loadPdfJsRuntime(): Promise<PdfJsRuntime> {
   }
   if (pdfjsPromise) return pdfjsPromise;
 
-  pdfjsPromise = import(/* @vite-ignore */ `${VENDOR_ASSET_BASE}/pdfjs/pdf.min.mjs`)
+  pdfjsPromise = import(/* @vite-ignore */ vendorAssetUrl('pdfjs/pdf.min.mjs'))
     .then((mod: PdfJsRuntime) => {
-      mod.GlobalWorkerOptions.workerSrc = `${VENDOR_ASSET_BASE}/pdfjs/pdf.worker.min.mjs`;
+      mod.GlobalWorkerOptions.workerSrc = vendorAssetUrl('pdfjs/pdf.worker.min.mjs');
       return mod;
     })
     .catch((err: unknown) => {

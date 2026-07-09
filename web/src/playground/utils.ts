@@ -230,6 +230,83 @@ export function isSafeImageUrl(url: string) {
   return /^(data:image\/(?:png|jpeg|jpg|webp|gif);base64,|https?:|blob:|\/assets-runtime\/|\/api\/v1\/ext-user\/airgate-playground\/assets\/)/i.test(url);
 }
 
+function escapeHtml(text: string) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function urlToDataURL(url: string): Promise<string | null> {
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const blob = await resp.blob();
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error || new Error('read failed'));
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
+// 消息 → text/html 剪贴板片段：文本转义、图片内联为 data URL <img>，
+// 粘贴到微信/Word/邮件等富文本编辑器时文字和图片一起带过去。
+export async function messageContentToClipboardHtml(content: string): Promise<string> {
+  const parts: string[] = [];
+  const pushText = (text: string) => {
+    const trimmed = text.trim();
+    if (trimmed) parts.push(`<div>${escapeHtml(trimmed).replace(/\n/g, '<br>')}</div>`);
+  };
+
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  IMAGE_MARKDOWN_RE.lastIndex = 0;
+  while ((match = IMAGE_MARKDOWN_RE.exec(content)) !== null) {
+    pushText(content.slice(lastIndex, match.index));
+    const url = match[1];
+    const src = url.startsWith('data:') ? url : (await urlToDataURL(url)) || url;
+    parts.push(`<img src="${escapeHtml(src)}" alt="">`);
+    lastIndex = match.index + match[0].length;
+  }
+  pushText(content.slice(lastIndex));
+  return parts.join('');
+}
+
+// 复制消息：含图片时写 text/plain + text/html 双格式，纯文本场景/失败回退 copyText。
+export async function copyMessageContent(content: string) {
+  const plain = copyableMessageText(content);
+  IMAGE_MARKDOWN_RE.lastIndex = 0;
+  const hasImages = IMAGE_MARKDOWN_RE.test(content);
+  IMAGE_MARKDOWN_RE.lastIndex = 0;
+  if (
+    !hasImages ||
+    typeof ClipboardItem === 'undefined' ||
+    !navigator.clipboard?.write ||
+    !window.isSecureContext
+  ) {
+    await copyText(plain);
+    return;
+  }
+  try {
+    // text/html 用 Promise 形式传入：Safari 要求剪贴板写入保持在用户手势内
+    const htmlBlob = messageContentToClipboardHtml(content)
+      .then(html => new Blob([html], { type: 'text/html' }));
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'text/plain': new Blob([plain], { type: 'text/plain' }),
+        'text/html': htmlBlob,
+      }),
+    ]);
+  } catch {
+    await copyText(plain);
+  }
+}
+
 export async function copyText(text: string) {
   if (navigator.clipboard?.writeText && window.isSecureContext) {
     await navigator.clipboard.writeText(text);

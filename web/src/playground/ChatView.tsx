@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import type { Message } from './types';
-import { copyableMessageText, generatedImages, hasCopyableMessageText } from './utils';
+import { generatedImages, hasCopyableMessageText } from './utils';
 import { usePlayground } from './PlaygroundContext';
 import { renderMessageContent } from './MessageRendering';
 import { styles } from './styles';
@@ -57,15 +57,15 @@ export function ChatView() {
 
   const renderCopyableMessageContent = (targetID: string, content: string, message?: Message) => {
     const copyVisible = isMobile || hoveredCopyTarget === targetID;
-    const copyableText = copyableMessageText(content);
-    const showCopyButton = hasCopyableMessageText(content);
     const images = generatedImages(content);
+    // 传原始 content：handleMessageCopy 会同时写入纯文本与含图片的富文本
+    const showCopyButton = hasCopyableMessageText(content) || images.length > 0;
     const trailingInlineAction = showCopyButton ? (
       <span style={{
         ...styles.messageCopyAfterText,
         ...(copyVisible ? styles.messageCopyAfterTextVisible : null),
       }}>
-        {renderCopyButton(copyableText, 'Copy message', false, styles.messageCopyAfterTextBtn)}
+        {renderCopyButton(content, 'Copy message', false, styles.messageCopyAfterTextBtn)}
       </span>
     ) : undefined;
 

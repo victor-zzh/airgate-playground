@@ -34,7 +34,7 @@ import {
   THINKING_VISIBLE_STORAGE_KEY,
 } from './constants';
 import {
-  copyText,
+  copyMessageContent,
   defaultModelOptionValue,
   getStoredActiveConversationId,
   getStoredSelectedModel,
@@ -756,7 +756,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   }, [sendMessage]);
 
   const handleMessageCopy = useCallback((content: string) => {
-    void copyText(content)
+    void copyMessageContent(content)
       .then(() => setInteractionNotice(t('playground.copied', { defaultValue: 'Copied' })))
       .catch(() => setInteractionNotice(t('playground.copy_failed', { defaultValue: 'Copy failed' })));
   }, [t]);
