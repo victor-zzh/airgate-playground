@@ -1,7 +1,7 @@
 import { Children, Suspense, cloneElement, isValidElement, lazy, useState, type ReactNode } from 'react';
 import type { MessageContentOptions } from './types';
 import { styles } from './styles';
-import { isSafeImageUrl, isSafeLinkUrl } from './utils';
+import { formatByteSize, isSafeImageUrl, isSafeLinkUrl, splitFileBlocks, type ParsedFileBlock } from './utils';
 import { IMAGE_MARKDOWN_ITEM_RE } from './constants';
 
 const MathRenderer = lazy(() => import('../MathRenderer'));
@@ -202,14 +202,120 @@ export function appendTrailingInlineAction(nodes: ReactNode[], action?: ReactNod
   return nodes;
 }
 
+const fileBlockChipStyles = {
+  details: {
+    margin: '4px 0',
+    border: '1px solid rgba(128, 128, 128, 0.28)',
+    borderRadius: 8,
+    padding: '4px 8px',
+    background: 'rgba(128, 128, 128, 0.08)',
+    fontSize: 13,
+  },
+  summary: {
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    listStyle: 'none' as const,
+    userSelect: 'none' as const,
+  },
+  name: {
+    fontWeight: 600,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+    maxWidth: 260,
+  },
+  meta: { opacity: 0.65, fontSize: 12, flexShrink: 0 },
+  badge: {
+    fontSize: 11,
+    padding: '0 6px',
+    borderRadius: 6,
+    background: 'rgba(217, 119, 6, 0.16)',
+    color: '#b45309',
+    flexShrink: 0,
+  },
+  content: {
+    marginTop: 6,
+    maxHeight: 320,
+    overflow: 'auto' as const,
+    whiteSpace: 'pre-wrap' as const,
+    wordBreak: 'break-word' as const,
+    fontSize: 12,
+    lineHeight: 1.5,
+    opacity: 0.9,
+  },
+};
+
+// 消息里的 <file> 块折叠为 chip，展开时才渲染内容（200k 字符的抽取文本不能直出气泡）。
+function FileBlockChip({ block }: { block: ParsedFileBlock }) {
+  const [open, setOpen] = useState(false);
+  const sizeLabel = formatByteSize(block.size);
+  return (
+    <details
+      style={fileBlockChipStyles.details}
+      onToggle={event => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary style={fileBlockChipStyles.summary}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <path d="M14 2v6h6" />
+        </svg>
+        <span style={fileBlockChipStyles.name} title={block.name}>{block.name}</span>
+        {sizeLabel && <span style={fileBlockChipStyles.meta}>{sizeLabel}</span>}
+        {block.truncated && <span style={fileBlockChipStyles.badge}>已截断</span>}
+      </summary>
+      {open && <div style={fileBlockChipStyles.content}>{block.content}</div>}
+    </details>
+  );
+}
+
 export function renderMessageContent(content: string, options: MessageContentOptions = {}) {
+  if (options.parseFileBlocks && content.includes('<file name="')) {
+    const segments = splitFileBlocks(content);
+    if (segments.some(segment => segment.kind === 'file')) {
+      // 图片预览索引须跨文本段连续（ChatView 用整条消息的 generatedImages 列表）
+      let imageIndex = -1;
+      const sharedOptions: MessageContentOptions = {
+        ...options,
+        takeImageIndex: () => {
+          imageIndex += 1;
+          return imageIndex;
+        },
+      };
+      // trailingInlineAction（悬浮复制按钮）只挂在最后一个文本段，避免逐段重复。
+      const lastTextIndex = segments.reduce((last, segment, index) => (segment.kind === 'text' ? index : last), -1);
+      const nodes = segments.map((segment, index) => (
+        segment.kind === 'file'
+          ? <FileBlockChip key={`fileblock-${index}`} block={segment.block} />
+          : (
+            <div key={`filetext-${index}`}>
+              {renderMarkdownContent(
+                segment.text,
+                index === lastTextIndex ? sharedOptions : { ...sharedOptions, trailingInlineAction: undefined },
+              )}
+            </div>
+          )
+      ));
+      // 纯文件消息没有文本段可挂复制按钮，单独补一行
+      if (lastTextIndex === -1 && options.trailingInlineAction) {
+        nodes.push(<div key="fileblock-action">{options.trailingInlineAction}</div>);
+      }
+      return nodes;
+    }
+  }
+  return renderMarkdownContent(content, options);
+}
+
+function renderMarkdownContent(content: string, options: MessageContentOptions = {}) {
+  // 分段渲染（file 块拆分）时由上层传入共享计数器，保证图片索引跨段连续
   let imageIndex = -1;
   const renderOptions: MessageContentOptions = {
     ...options,
-    takeImageIndex: () => {
+    takeImageIndex: options.takeImageIndex ?? (() => {
       imageIndex += 1;
       return imageIndex;
-    },
+    }),
   };
   const lines = content.replace(/\r\n?/g, '\n').split('\n');
   const nodes: ReactNode[] = [];

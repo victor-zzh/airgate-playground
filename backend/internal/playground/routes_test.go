@@ -10,6 +10,21 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+func TestValidateChatForwardBodySize(t *testing.T) {
+	t.Parallel()
+
+	if err := validateChatForwardBodySize(maxChatForwardBodyBytes); err != nil {
+		t.Fatalf("body at limit should pass, got %v", err)
+	}
+	err := validateChatForwardBodySize(maxChatForwardBodyBytes + 1)
+	if err == nil {
+		t.Fatal("body above limit should be rejected")
+	}
+	if !strings.Contains(err.Error(), "30MB") {
+		t.Fatalf("error = %q, want actionable size hint", err.Error())
+	}
+}
+
 func TestWriteHostForwardErrorInvalidArgument(t *testing.T) {
 	t.Parallel()
 

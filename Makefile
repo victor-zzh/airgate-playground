@@ -54,6 +54,7 @@ fmt: ## 格式化代码
 
 test: ## 运行测试
 	@cd backend && $(GO) test ./...
+	@cd web && pnpm test
 
 vet: ## 静态分析
 	@cd backend && $(GO) vet ./...

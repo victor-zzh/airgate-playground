@@ -4,10 +4,9 @@ import {
   ACTIVE_CONVERSATION_STORAGE_KEY,
   BASE64_DATA_URL_RE,
   DEFAULT_MODEL_ID,
+  FILE_BLOCK_RE,
   IMAGE_MARKDOWN_ITEM_RE,
   IMAGE_MARKDOWN_RE,
-  MAX_IMAGE_BYTES,
-  MAX_TEXT_FILE_BYTES,
   SELECTED_MODEL_STORAGE_KEY,
 } from './constants';
 
@@ -56,63 +55,69 @@ export function escapeMarkdownAlt(text: string) {
 export function messageContentWithAttachments(text: string, images: PendingImage[], files: PendingFile[]) {
   const body = text.trim();
   const imageMarkdown = images.map(image => `![${escapeMarkdownAlt(image.name)}](${image.url})`).join('\n');
-  const fileText = files.map(file => (
-    `<file name="${escapeFileAttribute(file.name)}" type="${escapeFileAttribute(file.type || 'text/plain')}" size="${file.size}">\n${file.content}\n</file>`
-  )).join('\n\n');
+  const fileText = files.map(file => {
+    const truncatedAttr = file.truncated ? ' truncated="true"' : '';
+    // 内容里的字面 </file> 会提前终止 FILE_BLOCK_RE 的非贪婪匹配，转义防串块
+    const safeContent = file.content.replace(/<\/file>/gi, '<\\/file>');
+    return `<file name="${escapeFileAttribute(file.name)}" type="${escapeFileAttribute(file.type || 'text/plain')}" size="${file.size}"${truncatedAttr}>\n${safeContent}\n</file>`;
+  }).join('\n\n');
   return [body, fileText, imageMarkdown].filter(Boolean).join('\n\n');
 }
 
-export function messageContentWithImages(text: string, images: PendingImage[]) {
-  return messageContentWithAttachments(text, images, []);
+export interface ParsedFileBlock {
+  name: string;
+  type: string;
+  size: number;
+  truncated: boolean;
+  content: string;
+}
+
+// 把消息里的 <file> 块拆出来（渲染层折叠成 chip 用）。
+export function splitFileBlocks(content: string): Array<{ kind: 'text'; text: string } | { kind: 'file'; block: ParsedFileBlock }> {
+  const segments: Array<{ kind: 'text'; text: string } | { kind: 'file'; block: ParsedFileBlock }> = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  FILE_BLOCK_RE.lastIndex = 0;
+
+  while ((match = FILE_BLOCK_RE.exec(content)) !== null) {
+    const before = content.slice(lastIndex, match.index).trim();
+    if (before) segments.push({ kind: 'text', text: before });
+    segments.push({
+      kind: 'file',
+      block: {
+        name: unescapeFileAttribute(match[1]),
+        type: unescapeFileAttribute(match[2]),
+        size: Number(match[3]) || 0,
+        truncated: Boolean(match[4]),
+        content: match[5],
+      },
+    });
+    lastIndex = match.index + match[0].length;
+  }
+
+  const tail = content.slice(lastIndex).trim();
+  if (tail) segments.push({ kind: 'text', text: tail });
+  return segments;
+}
+
+export function stripFileBlocks(content: string) {
+  FILE_BLOCK_RE.lastIndex = 0;
+  return content.replace(FILE_BLOCK_RE, (_m, name: string) => `[文件: ${unescapeFileAttribute(name)}]`);
 }
 
 function escapeFileAttribute(text: string) {
   return text.replace(/[&"]/g, (ch) => (ch === '&' ? '&amp;' : '&quot;'));
 }
 
-export async function fileToDataURL(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('Failed to read image'));
-    reader.readAsDataURL(file);
-  });
+function unescapeFileAttribute(text: string) {
+  return text.replace(/&quot;/g, '"').replace(/&amp;/g, '&');
 }
 
-export async function imagesFromFiles(files: File[]) {
-  const images = files.filter(file => file.type.startsWith('image/'));
-  if (images.some(file => file.size > MAX_IMAGE_BYTES)) {
-    throw new Error('Images must be 10MB or smaller');
-  }
-
-  return Promise.all(images.map(async file => ({
-    id: `${file.name}-${file.lastModified}-${file.size}`,
-    name: file.name || 'pasted-image',
-    url: await fileToDataURL(file),
-    file,
-  })));
-}
-
-export function isSupportedTextFile(file: File) {
-  const name = file.name.toLowerCase();
-  if (file.type.startsWith('text/')) return true;
-  return /\.(txt|md|markdown|csv|json|jsonl|log|xml|yaml|yml|ts|tsx|js|jsx|py|go|rs|java|kt|swift|sql|html|css)$/i.test(name);
-}
-
-export async function textFilesFromFiles(files: File[]): Promise<PendingFile[]> {
-  const textFiles = files.filter(file => !file.type.startsWith('image/') && isSupportedTextFile(file));
-  if (!textFiles.length) return [];
-  if (textFiles.some(file => file.size > MAX_TEXT_FILE_BYTES)) {
-    throw new Error('Text files must be 512KB or smaller');
-  }
-
-  return Promise.all(textFiles.map(async file => ({
-    id: `${file.name}-${file.lastModified}-${file.size}`,
-    name: file.name || 'attachment.txt',
-    content: await file.text(),
-    size: file.size,
-    type: file.type || 'text/plain',
-  })));
+export function formatByteSize(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 100 * 1024 ? 1 : 0)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
 }
 
 export function generatedImages(content: string): PreviewImage[] {
@@ -141,7 +146,7 @@ export function hasCopyableMessageText(content: string) {
 }
 
 export function titleFromMessageContent(content: string) {
-  const title = content.replace(IMAGE_MARKDOWN_RE, '[Image]').trim() || '[Image]';
+  const title = stripFileBlocks(content).replace(IMAGE_MARKDOWN_RE, '[Image]').trim() || '[Image]';
   return title.slice(0, 30) + (title.length > 30 ? '...' : '');
 }
 

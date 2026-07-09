@@ -3,8 +3,24 @@ import type { ChatMessageContent, Conversation, Message, ReasoningEffort, UserIn
 export type { ChatMessageContent, Conversation, Message, ReasoningEffort, UserInfo };
 
 export type SelectOption = { value: string; label: string };
-export type PendingImage = { id: string; name: string; url: string; file?: File };
-export type PendingFile = { id: string; name: string; content: string; size: number; type: string };
+export type PendingImage = {
+  id: string;
+  name: string;
+  url: string;
+  originalBytes?: number;
+  finalBytes?: number;
+  compressed?: boolean;
+  warningText?: string;
+};
+export type PendingFile = {
+  id: string;
+  name: string;
+  content: string;
+  size: number;
+  type: string;
+  truncated?: boolean;
+  warningText?: string;
+};
 export type PreviewImage = { url: string; alt: string };
 export type ImagePreviewState = { images: PreviewImage[]; index: number };
 export type BlobUrlRegistry = Map<string, string>;
@@ -40,4 +56,6 @@ export type MessageContentOptions = {
   takeImageIndex?: () => number;
   trailingInlineAction?: import('react').ReactNode;
   isMobile?: boolean;
+  // 仅用户消息为 true：把 <file> 块折叠成 chip。助手输出里的同形文本（如代码示例）按普通 markdown 渲染。
+  parseFileBlocks?: boolean;
 };

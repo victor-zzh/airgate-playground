@@ -22,7 +22,21 @@ import (
 const (
 	headerEntry  = "X-Airgate-Entry"
 	headerUserID = "X-Airgate-User-Id"
+
+	// 转发 body 上限：历史图片资产在 rewriteChatImageAssetURLs 展开成 data URL 后，
+	// 多轮会话可能持续膨胀。Anthropic /v1/messages 请求上限 32MB，这里预留余量提前拦截，
+	// 避免把注定失败的大请求推给上游。
+	maxChatForwardBodyBytes = 30 << 20
 )
+
+var errChatBodyTooLarge = errors.New("会话内容过大：历史图片与附件展开后超过 30MB，请减少图片数量或新建会话后重试")
+
+func validateChatForwardBodySize(size int) error {
+	if size > maxChatForwardBodyBytes {
+		return errChatBodyTooLarge
+	}
+	return nil
+}
 
 func (p *Plugin) RegisterRoutes(r sdk.RouteRegistrar) {
 	// Conversation CRUD
@@ -240,9 +254,21 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "invalid request body")
 		return
 	}
+	// 资产重写只会让 body 变大（asset 引用 → base64 data URL），原始超限的请求
+	// 先拒掉，省去整份 JSON 解析、资产拉取与 base64 编码。
+	if err := validateChatForwardBodySize(len(body)); err != nil {
+		logger.Warn("chat_forward_body_too_large", "body_bytes", len(body), "stage", "raw")
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "request_too_large", err.Error())
+		return
+	}
 	body, err = p.rewriteChatImageAssetURLs(ctx, body)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
+		return
+	}
+	if err := validateChatForwardBodySize(len(body)); err != nil {
+		logger.Warn("chat_forward_body_too_large", "body_bytes", len(body), "stage", "expanded")
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "request_too_large", err.Error())
 		return
 	}
 	plan, err := compileChatForwardPlan(platform, body)

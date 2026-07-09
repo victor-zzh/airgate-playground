@@ -1,6 +1,10 @@
 import type { ReasoningEffort } from './types';
 import { usePlayground } from './PlaygroundContext';
+import { attachmentAcceptList } from './attachments/detect';
+import { formatByteSize } from './utils';
 import { styles } from './styles';
+
+const ATTACHMENT_ACCEPT = attachmentAcceptList();
 
 export function InputArea() {
   const {
@@ -14,6 +18,7 @@ export function InputArea() {
     handleKeyDown,
     pendingImages,
     pendingFiles,
+    isProcessingAttachments,
     removePendingImage,
     removePendingFile,
     inputRef,
@@ -42,64 +47,118 @@ export function InputArea() {
         ...(isMobile ? styles.inputWrapperMobile : null),
         ...(isActiveConversationStreaming ? styles.inputWrapperStreaming : null),
       }} className="pg-input-wrapper">
-        {(pendingImages.length > 0 || pendingFiles.length > 0) && (
+        {(pendingImages.length > 0 || pendingFiles.length > 0 || isProcessingAttachments) && (
           <div style={styles.imagePreviewList}>
-            {pendingImages.map(image => (
-              <div
-                key={image.id}
-                style={{
-                  ...styles.imagePreviewItem,
-                  ...(isActiveConversationStreaming ? { cursor: 'default', opacity: 0.6 } : null),
-                }}
-              >
-                <img src={image.url} alt={image.name} style={styles.imagePreview} />
-                <button
-                  type="button"
-                  style={styles.removeImageBtn}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    removePendingImage(image.id);
+            {pendingImages.map(image => {
+              const sizeLabel = image.compressed && image.originalBytes && image.finalBytes
+                ? t('playground.attachment_optimized', {
+                  defaultValue: '已优化 {{from}} → {{to}}',
+                  from: formatByteSize(image.originalBytes),
+                  to: formatByteSize(image.finalBytes),
+                })
+                : formatByteSize(image.finalBytes || 0);
+              const tooltip = [image.name, sizeLabel, image.warningText].filter(Boolean).join('\n');
+              return (
+                <div
+                  key={image.id}
+                  style={{
+                    ...styles.imagePreviewItem,
+                    ...(isActiveConversationStreaming ? { cursor: 'default', opacity: 0.6 } : null),
                   }}
-                  aria-label={`Remove ${image.name}`}
-                  disabled={isActiveConversationStreaming}
+                  title={tooltip}
                 >
-                  &times;
-                </button>
-              </div>
-            ))}
-            {pendingFiles.map(file => (
-              <div
-                key={file.id}
-                style={{
-                  ...styles.filePreviewItem,
-                  ...(isActiveConversationStreaming ? { cursor: 'default', opacity: 0.6 } : null),
-                }}
-              >
+                  <img src={image.url} alt={image.name} style={styles.imagePreview} />
+                  {image.compressed && (
+                    <span
+                      style={{
+                        position: 'absolute',
+                        left: 3,
+                        bottom: 3,
+                        fontSize: 10,
+                        lineHeight: '14px',
+                        padding: '0 4px',
+                        borderRadius: 4,
+                        background: 'rgba(0, 0, 0, 0.55)',
+                        color: '#fff',
+                        pointerEvents: 'none',
+                      }}
+                    >
+                      {t('playground.attachment_optimized_badge', { defaultValue: '已优化' })}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    style={styles.removeImageBtn}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      removePendingImage(image.id);
+                    }}
+                    aria-label={`Remove ${image.name}`}
+                    disabled={isActiveConversationStreaming}
+                  >
+                    &times;
+                  </button>
+                </div>
+              );
+            })}
+            {pendingFiles.map(file => {
+              const metaParts = [formatByteSize(file.size)];
+              if (file.truncated) metaParts.push(t('playground.attachment_truncated_badge', { defaultValue: '已截断' }));
+              const tooltip = [file.name, metaParts.filter(Boolean).join(' · '), file.warningText].filter(Boolean).join('\n');
+              return (
+                <div
+                  key={file.id}
+                  style={{
+                    ...styles.filePreviewItem,
+                    ...(isActiveConversationStreaming ? { cursor: 'default', opacity: 0.6 } : null),
+                  }}
+                  title={tooltip}
+                >
+                  <div style={styles.filePreviewIcon} aria-hidden="true">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <path d="M14 2v6h6" />
+                      <path d="M8 13h8" />
+                      <path d="M8 17h6" />
+                    </svg>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={styles.filePreviewName} title={file.name}>{file.name}</div>
+                    <div style={{ fontSize: 11, opacity: 0.65, whiteSpace: 'nowrap' }}>
+                      {metaParts.filter(Boolean).join(' · ')}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    style={styles.removeImageBtn}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      removePendingFile(file.id);
+                    }}
+                    aria-label={`Remove ${file.name}`}
+                    disabled={isActiveConversationStreaming}
+                  >
+                    &times;
+                  </button>
+                </div>
+              );
+            })}
+            {isProcessingAttachments && (
+              <div style={{ ...styles.filePreviewItem, opacity: 0.75 }}>
                 <div style={styles.filePreviewIcon} aria-hidden="true">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                    <path d="M14 2v6h6" />
-                    <path d="M8 13h8" />
-                    <path d="M8 17h6" />
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M21 12a9 9 0 1 1-6.2-8.56">
+                      <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.9s" repeatCount="indefinite" />
+                    </path>
                   </svg>
                 </div>
-                <div style={styles.filePreviewName} title={file.name}>{file.name}</div>
-                <button
-                  type="button"
-                  style={styles.removeImageBtn}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    removePendingFile(file.id);
-                  }}
-                  aria-label={`Remove ${file.name}`}
-                  disabled={isActiveConversationStreaming}
-                >
-                  &times;
-                </button>
+                <div style={styles.filePreviewName}>
+                  {t('playground.attachment_processing', { defaultValue: '解析附件中…' })}
+                </div>
               </div>
-            ))}
+            )}
           </div>
         )}
 
@@ -118,7 +177,7 @@ export function InputArea() {
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*,.txt,.md,.markdown,.csv,.json,.jsonl,.log,.xml,.yaml,.yml,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.kt,.swift,.sql,.html,.css,text/*"
+          accept={ATTACHMENT_ACCEPT}
           multiple
           style={styles.fileInput}
           onChange={handleAttachmentChange}

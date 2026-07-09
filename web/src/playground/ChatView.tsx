@@ -85,6 +85,8 @@ export function ChatView() {
           ...interactiveMessageOptions,
           onImagePreview: images.length > 0 ? (_url, _alt, imageIndex) => showImagePreview(images, imageIndex) : undefined,
           trailingInlineAction,
+          // 只有用户消息才有真实附件块；助手输出里的同形文本按普通 markdown 渲染
+          parseFileBlocks: message?.role === 'user',
         })}
         {!message && null}
       </div>

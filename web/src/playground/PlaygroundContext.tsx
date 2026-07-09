@@ -38,7 +38,6 @@ import {
   defaultModelOptionValue,
   getStoredActiveConversationId,
   getStoredSelectedModel,
-  imagesFromFiles,
   messageContentWithAttachments,
   modelOptionValue,
   readLocalStorageValue,
@@ -46,11 +45,12 @@ import {
   replaceBlobUrlsWithBase64,
   revokeBlobRegistry,
   supportsReasoning,
-  textFilesFromFiles,
   titleFromMessageContent,
   toChatMessageContent,
   writeLocalStorageValue,
 } from './utils';
+import { processAttachments } from './attachments/processor';
+import { formatAttachmentErrors, formatAttachmentIssue } from './attachments/issues';
 import { styles } from './styles';
 import { CHAT_MODEL_REGISTRY } from './modelConfig';
 
@@ -88,6 +88,7 @@ export interface PlaygroundContextValue {
   setInput: React.Dispatch<React.SetStateAction<string>>;
   pendingImages: PendingImage[];
   pendingFiles: PendingFile[];
+  isProcessingAttachments: boolean;
   canSendMessage: boolean;
 
   error: string;
@@ -161,6 +162,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const [isProcessingAttachments, setIsProcessingAttachments] = useState(false);
   const [selectedModel, setSelectedModel] = useState(() => {
     const storedModel = getStoredSelectedModel();
     return CHAT_MODEL_REGISTRY.some(model => modelOptionValue(model) === storedModel)
@@ -238,6 +240,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     selectedPlatform &&
     selectedModelID &&
     !isStreaming &&
+    !isProcessingAttachments &&
     (input.trim() || pendingImages.length > 0 || pendingFiles.length > 0),
   );
 
@@ -661,44 +664,78 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     t,
   ]);
 
-  const addImageFiles = useCallback(async (files: File[]) => {
+  // 统一附件入口：图片/PDF/Excel/邮件/网页/文本都经 processAttachments 处理。
+  // 处理期间（大 PDF 秒级）用 ref 同步闸门挡住并发批次——两个重叠批次会拿到
+  // 同一份过期额度快照，叠加后超过单条消息限额。
+  const processingAttachmentsRef = useRef(false);
+  const addAttachments = useCallback(async (files: File[]) => {
     if (!files.length) return;
-    const nextImages = await imagesFromFiles(files);
-    if (!nextImages.length) return;
-    setPendingImages(prev => [...prev, ...nextImages]);
+    if (processingAttachmentsRef.current) {
+      setError(t('playground.attachment.busy', { defaultValue: '正在解析附件，请稍候再添加' }));
+      return;
+    }
+    processingAttachmentsRef.current = true;
+    setIsProcessingAttachments(true);
     setError('');
-    setRetryRequest(null);
-  }, []);
-
-  const addTextFiles = useCallback(async (files: File[]) => {
-    if (!files.length) return;
-    const nextFiles = await textFilesFromFiles(files);
-    if (!nextFiles.length) return;
-    setPendingFiles(prev => [...prev, ...nextFiles]);
-    setError('');
-    setRetryRequest(null);
-  }, []);
-
-  const handleAttachmentChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files || []);
     try {
-      await addImageFiles(files);
-      await addTextFiles(files);
+      const result = await processAttachments(files, {
+        imageCount: pendingImages.length,
+        attachmentCount: pendingImages.length + pendingFiles.length,
+        totalRawBytes: pendingImages.reduce((sum, item) => sum + (item.originalBytes || 0), 0)
+          + pendingFiles.reduce((sum, item) => sum + item.size, 0),
+        extractedChars: pendingFiles.reduce((sum, item) => sum + item.content.length, 0),
+        imageBinaryBytes: pendingImages.reduce((sum, item) => sum + (item.finalBytes || 0), 0),
+      });
+
+      if (result.images.length) {
+        setPendingImages(prev => [...prev, ...result.images.map(image => ({
+          id: image.id,
+          name: image.name,
+          url: image.url,
+          originalBytes: image.originalBytes,
+          finalBytes: image.finalBytes,
+          compressed: image.compressed,
+          warningText: image.warnings.map(issue => formatAttachmentIssue(t, issue)).join('；') || undefined,
+        }))]);
+      }
+      if (result.files.length) {
+        setPendingFiles(prev => [...prev, ...result.files.map(file => ({
+          id: file.id,
+          name: file.name,
+          content: file.content,
+          size: file.size,
+          type: file.type,
+          truncated: file.truncated,
+          warningText: file.warnings.map(issue => formatAttachmentIssue(t, issue)).join('；') || undefined,
+        }))]);
+      }
+      // 只有真的加上了附件才清掉重试请求，避免一次失败的添加毁掉重试按钮
+      if (result.images.length || result.files.length) {
+        setRetryRequest(null);
+      }
+      if (result.errors.length) {
+        setError(formatAttachmentErrors(t, result.errors));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to read file');
     } finally {
-      event.target.value = '';
+      processingAttachmentsRef.current = false;
+      setIsProcessingAttachments(false);
     }
-  }, [addImageFiles, addTextFiles]);
+  }, [pendingFiles, pendingImages, t]);
+
+  const handleAttachmentChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    await addAttachments(files);
+  }, [addAttachments]);
 
   const handlePaste = useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(event.clipboardData.files || []);
     if (!files.length) return;
     event.preventDefault();
-    void Promise.all([addImageFiles(files), addTextFiles(files)]).catch(err => {
-      setError(err instanceof Error ? err.message : 'Failed to read file');
-    });
-  }, [addImageFiles, addTextFiles]);
+    void addAttachments(files);
+  }, [addAttachments]);
 
   const removePendingImage = useCallback((id: string) => {
     setPendingImages(prev => prev.filter(item => item.id !== id));
@@ -802,6 +839,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     setInput,
     pendingImages,
     pendingFiles,
+    isProcessingAttachments,
     canSendMessage,
     error,
     retryRequest,

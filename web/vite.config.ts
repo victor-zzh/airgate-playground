@@ -71,6 +71,23 @@ function copyKatexAssets() {
   cpSync(join(katexDistDir, 'fonts'), join(katexOutDir, 'fonts'), { recursive: true });
 }
 
+// 重量级解析库不打进单文件 bundle，复制到 dist/vendor 供运行时懒加载
+// （加载路径见 src/playground/attachments/vendor.ts）。
+const vendorOutDir = join(projectRoot, 'dist', 'vendor');
+
+function copyVendorAssets() {
+  rmSync(vendorOutDir, { force: true, recursive: true });
+  mkdirSync(join(vendorOutDir, 'pdfjs'), { recursive: true });
+  mkdirSync(join(vendorOutDir, 'xlsx'), { recursive: true });
+  const pdfjsBuildDir = join(projectRoot, 'node_modules', 'pdfjs-dist', 'build');
+  copyFileSync(join(pdfjsBuildDir, 'pdf.min.mjs'), join(vendorOutDir, 'pdfjs', 'pdf.min.mjs'));
+  copyFileSync(join(pdfjsBuildDir, 'pdf.worker.min.mjs'), join(vendorOutDir, 'pdfjs', 'pdf.worker.min.mjs'));
+  copyFileSync(
+    join(projectRoot, 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js'),
+    join(vendorOutDir, 'xlsx', 'xlsx.full.min.js'),
+  );
+}
+
 const watchOptions = process.argv.includes('--watch')
   ? { chokidar: { usePolling: true, interval: 1000 } }
   : undefined;
@@ -82,6 +99,10 @@ export default defineConfig({
     {
       name: 'copy-katex-assets',
       writeBundle: copyKatexAssets,
+    },
+    {
+      name: 'copy-vendor-assets',
+      writeBundle: copyVendorAssets,
     },
   ],
   define: {
