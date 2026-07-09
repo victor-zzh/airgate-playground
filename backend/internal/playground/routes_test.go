@@ -61,3 +61,24 @@ func TestWriteHostForwardErrorUnavailable(t *testing.T) {
 		t.Fatalf("body = %q, want generic retry message", body)
 	}
 }
+
+func TestModelSupportsChat(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		caps []string
+		want bool
+	}{
+		{"empty defaults to chat", nil, true},
+		{"explicit chat", []string{"chat", "reasoning"}, true},
+		{"image only excluded", []string{"image_generation"}, false},
+		{"case insensitive", []string{"Chat"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := modelSupportsChat(tc.caps); got != tc.want {
+				t.Fatalf("modelSupportsChat(%v) = %v, want %v", tc.caps, got, tc.want)
+			}
+		})
+	}
+}

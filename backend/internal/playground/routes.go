@@ -444,9 +444,29 @@ func (p *Plugin) handleListModels(w http.ResponseWriter, r *http.Request) {
 			// 单平台失败不阻断（如插件未装）；前端拿到空列表时回退硬编码
 			continue
 		}
-		models = append(models, items...)
+		for _, item := range items {
+			// 只放对话模型：同平台注册表里可能混有图像生成模型（image_generation），
+			// 不应出现在 AI Chat 的模型下拉里
+			if modelSupportsChat(item.Capabilities) {
+				models = append(models, item)
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": models})
+}
+
+// modelSupportsChat 判断模型是否可用于对话。空 capabilities 视为对话模型（历史/兜底），
+// 显式声明时必须含 "chat"。
+func modelSupportsChat(capabilities []string) bool {
+	if len(capabilities) == 0 {
+		return true
+	}
+	for _, c := range capabilities {
+		if strings.EqualFold(c, "chat") {
+			return true
+		}
+	}
+	return false
 }
 
 // ── Helpers ──
