@@ -229,7 +229,7 @@ func hostGetAssetBytes(ctx context.Context, host sdk.Host, objectKey string) (*h
 		return nil, err
 	}
 	return &hostAssetBytes{
-		Data:        bytesFromPayload(firstPayloadValue(payload, "data")),
+		Data:        binaryFromPayload(firstPayloadValue(payload, "data")),
 		ContentType: stringFromAny(firstPayloadValue(payload, "content_type")),
 	}, nil
 }
@@ -295,6 +295,28 @@ func bytesFromPayload(value interface{}) []byte {
 		return v
 	case string:
 		if decoded, err := base64.StdEncoding.DecodeString(v); err == nil && looksLikeJSON(decoded) {
+			return decoded
+		}
+		return []byte(v)
+	default:
+		body, _ := json.Marshal(v)
+		return body
+	}
+}
+
+// binaryFromPayload 解码 Host.Invoke 载荷中按契约必为二进制的字段（如 assets.get_bytes 的 data）。
+// core 侧以 []byte 写入 payload，经 JSON 编组到达插件时必然是 base64 字符串，这里必须无条件解码。
+// 不能复用 bytesFromPayload：其 looksLikeJSON 门槛是为 gateway.forward 的 JSON 响应体设计的，
+// 图片等二进制解码结果不像 JSON 会被退回 base64 原文，拼进 data URL 后形成双重编码，
+// 上游直接以 "Could not process image" 拒绝，且会话历史每轮重放导致会话永久失败。
+func binaryFromPayload(value interface{}) []byte {
+	switch v := value.(type) {
+	case nil:
+		return nil
+	case []byte:
+		return v
+	case string:
+		if decoded, err := base64.StdEncoding.DecodeString(v); err == nil {
 			return decoded
 		}
 		return []byte(v)

@@ -264,6 +264,7 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err = p.rewriteChatImageAssetURLs(ctx, body)
 	if err != nil {
+		logger.Warn("chat_asset_rewrite_failed", sdk.LogFieldError, err)
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
 		return
 	}
@@ -274,6 +275,7 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	plan, err := compileChatForwardPlan(platform, body)
 	if err != nil {
+		logger.Warn("chat_forward_compile_failed", sdk.LogFieldPlatform, platform, sdk.LogFieldError, err)
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
 		return
 	}
