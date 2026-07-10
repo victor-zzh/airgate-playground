@@ -921,6 +921,7 @@ export const styles: Record<string, CSSProperties> = {
     alignItems: 'center',
     gap: 8,
     width: 180,
+    maxWidth: '100%',
     height: 42,
     padding: '0 30px 0 10px',
     borderRadius: cssVar('radiusSm'),
@@ -928,6 +929,10 @@ export const styles: Record<string, CSSProperties> = {
     background: cssVar('bgHover'),
     color: cssVar('textSecondary'),
     boxSizing: 'border-box',
+  },
+  // 移动端占满整行，文件名显示更完整（避免固定 180 截断长文件名）
+  filePreviewItemMobile: {
+    width: '100%',
   },
   filePreviewIcon: {
     display: 'inline-flex',

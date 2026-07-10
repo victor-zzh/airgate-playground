@@ -111,6 +111,7 @@ export function InputArea() {
                   key={file.id}
                   style={{
                     ...styles.filePreviewItem,
+                    ...(isMobile ? styles.filePreviewItemMobile : null),
                     ...(isActiveConversationStreaming ? { cursor: 'default', opacity: 0.6 } : null),
                   }}
                   title={tooltip}

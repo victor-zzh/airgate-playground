@@ -168,7 +168,10 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   // 模型目录：优先后端动态目录（各网关插件注册表），拉取失败回退硬编码
   const [chatModels, setChatModels] = useState<ModelInfo[]>(CHAT_MODEL_REGISTRY);
+  const [modelsResolved, setModelsResolved] = useState(false);
   const [selectedModel, setSelectedModel] = useState(() => {
+    // 保留持久化原值（可能是动态目录独有、初始 registry 里没有的模型），
+    // 等动态目录加载后再校正；加载失败由下方 clamp effect 兜底
     const storedModel = getStoredSelectedModel();
     return storedModel || defaultModelOptionValue(CHAT_MODEL_REGISTRY);
   });
@@ -238,12 +241,34 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
         capabilities: item.capabilities || [],
       }));
       if (!items.length) return;
-      setChatModels(items);
-      setSelectedModel(current => (
-        items.some(model => modelOptionValue(model) === current) ? current : defaultModelOptionValue(items)
-      ));
-    }).catch(() => {});
+      // 某平台在动态目录里缺失（如该网关插件短暂不可用）时，用硬编码兜底补齐该平台，
+      // 避免一次上游抖动就让整类模型（如全部 Claude）从下拉里消失
+      const dynamicPlatforms = new Set(items.map(model => model.platform));
+      const merged = [...items];
+      for (const fallback of CHAT_MODEL_REGISTRY) {
+        if (!dynamicPlatforms.has(fallback.platform)) merged.push(fallback);
+      }
+      setChatModels(merged);
+      // 恢复用户持久化的选择（可能是动态目录独有、初始 registry 里没有的模型）
+      const stored = getStoredSelectedModel();
+      setSelectedModel(current => {
+        if (stored && merged.some(model => modelOptionValue(model) === stored)) return stored;
+        if (merged.some(model => modelOptionValue(model) === current)) return current;
+        return defaultModelOptionValue(merged);
+      });
+    }).catch(() => {}).finally(() => setModelsResolved(true));
   }, []);
+
+  // 兜底：目录确定后（成功或失败），selectedModel 若仍不在目录里则回退默认，
+  // 避免 selectedModelInfo 为空导致发送按钮永久禁用。门控在 resolved 之后，
+  // 防止加载完成前误清用户偏好。
+  useEffect(() => {
+    if (!modelsResolved) return;
+    if (selectedModel && !chatModels.some(model => modelOptionValue(model) === selectedModel)) {
+      const fallback = defaultModelOptionValue(chatModels);
+      if (fallback) setSelectedModel(fallback);
+    }
+  }, [modelsResolved, chatModels, selectedModel]);
 
   const sidebarConversations = useMemo(
     () => conversations.filter(item => item.id !== DRAFT_CONVERSATION_ID),
@@ -296,10 +321,10 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   }, [activeId, conversationsLoaded]);
 
   useEffect(() => {
+    // 只在选中模型确实存在于目录时写入；不在目录时（多为动态目录尚未加载）
+    // 保留而非清除，否则会丢掉持久化的动态独有模型偏好
     if (selectedModel && chatModels.some(item => modelOptionValue(item) === selectedModel)) {
       writeLocalStorageValue(SELECTED_MODEL_STORAGE_KEY, selectedModel);
-    } else {
-      writeLocalStorageValue(SELECTED_MODEL_STORAGE_KEY, null);
     }
   }, [chatModels, selectedModel]);
 
@@ -796,13 +821,15 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     const hasFiles = (event: DragEvent) => Boolean(
       event.dataTransfer && Array.from(event.dataTransfer.types).includes('Files'),
     );
+    const reset = () => { depth = 0; setIsDraggingFiles(false); };
     const onDragEnter = (event: DragEvent) => {
-      if (!hasFiles(event) || !activeIdRef.current) return;
+      if (!hasFiles(event)) return;
       depth += 1;
-      setIsDraggingFiles(true);
+      if (activeIdRef.current) setIsDraggingFiles(true);
     };
     const onDragOver = (event: DragEvent) => {
-      if (hasFiles(event) && activeIdRef.current) event.preventDefault();
+      // 无条件拦截浏览器默认：否则拖入的文件会导致整个 SPA 导航到该文件、丢失所有状态
+      if (hasFiles(event)) event.preventDefault();
     };
     const onDragLeave = (event: DragEvent) => {
       if (!hasFiles(event)) return;
@@ -810,22 +837,26 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
       if (depth === 0) setIsDraggingFiles(false);
     };
     const onDrop = (event: DragEvent) => {
-      depth = 0;
-      setIsDraggingFiles(false);
+      if (hasFiles(event)) event.preventDefault();
+      reset();
       if (!hasFiles(event) || !activeIdRef.current) return;
-      event.preventDefault();
       const files = Array.from(event.dataTransfer?.files || []);
       if (files.length) void addAttachmentsRef.current(files);
     };
+    // 拖拽被放弃（拖出窗口松手、Esc、切窗）时没有 drop/dragend，靠 blur 兜底清遮罩
     window.addEventListener('dragenter', onDragEnter);
     window.addEventListener('dragover', onDragOver);
     window.addEventListener('dragleave', onDragLeave);
     window.addEventListener('drop', onDrop);
+    window.addEventListener('dragend', reset);
+    window.addEventListener('blur', reset);
     return () => {
       window.removeEventListener('dragenter', onDragEnter);
       window.removeEventListener('dragover', onDragOver);
       window.removeEventListener('dragleave', onDragLeave);
       window.removeEventListener('drop', onDrop);
+      window.removeEventListener('dragend', reset);
+      window.removeEventListener('blur', reset);
     };
   }, []);
 

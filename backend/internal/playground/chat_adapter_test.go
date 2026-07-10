@@ -311,3 +311,39 @@ func TestCompileClaudeThinkingByReasoningEffort(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAIXHighClampedToHigh(t *testing.T) {
+	t.Parallel()
+	// xhigh 是 Claude-only 档；openai 分支应降级到 high 并保留其他字段
+	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],"stream":true,"reasoning_effort":"xhigh","stream_options":{"include_usage":true}}`)
+	plan, err := compileChatForwardPlan("openai", body)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(plan.Body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["reasoning_effort"] != "high" {
+		t.Fatalf("reasoning_effort = %v, want high (clamped from xhigh)", got["reasoning_effort"])
+	}
+	// 其他字段保留
+	if _, ok := got["stream_options"]; !ok {
+		t.Fatalf("stream_options dropped during clamp: %s", plan.Body)
+	}
+	if got["model"] != "gpt-5.5" {
+		t.Fatalf("model = %v", got["model"])
+	}
+}
+
+func TestOpenAINonXHighReasoningUntouched(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"high"}`)
+	plan, err := compileChatForwardPlan("openai", body)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+	if !bytes.Equal(plan.Body, body) {
+		t.Fatalf("non-xhigh openai body should be untouched, got %s", plan.Body)
+	}
+}

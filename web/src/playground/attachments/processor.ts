@@ -1,5 +1,6 @@
 import { detectAttachmentKind } from './detect';
 import { extractEml } from './eml';
+import { extractMsg } from './msg';
 import { processImageFile } from './image';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -67,7 +68,10 @@ async function extractByKind(kind: FileKind, file: File, maxChars: number): Prom
     case 'sheet':
       return extractWorkbook(buffer, maxChars);
     case 'email':
-      return extractEml(buffer, maxChars);
+      // .msg（Outlook CFB）与 .eml（MIME）按扩展名/字节分派
+      return /\.msg$/i.test(file.name) || file.type === 'application/vnd.ms-outlook'
+        ? extractMsg(buffer, maxChars)
+        : extractEml(buffer, maxChars);
     case 'webpage':
       return /\.(mht|mhtml)$/i.test(file.name) || file.type === 'multipart/related'
         ? extractMhtml(buffer, maxChars)

@@ -11,7 +11,9 @@ export function detectAttachmentKind(file: File): AttachmentKind | null {
   if (/\.(xlsx|xls)$/.test(name)
     || type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     || type === 'application/vnd.ms-excel') return 'sheet';
+  // 邮件：.eml（标准 MIME）与 .msg（Outlook CFB）都归 email，由抽取器按格式分派
   if (name.endsWith('.eml') || type === 'message/rfc822') return 'email';
+  if (name.endsWith('.msg') || type === 'application/vnd.ms-outlook') return 'email';
   // 网页保存文件（.html/.htm 按业务语义提取正文；代码类 .css/.js 走 text 原样）
   if (/\.(mht|mhtml)$/.test(name) || type === 'multipart/related') return 'webpage';
   if (/\.(html|htm)$/.test(name) || type === 'text/html') return 'webpage';
@@ -24,7 +26,7 @@ export function attachmentAcceptList(): string {
     'image/*',
     '.pdf',
     '.xlsx', '.xls',
-    '.eml', '.mht', '.mhtml', '.html', '.htm',
+    '.eml', '.msg', '.mht', '.mhtml', '.html', '.htm',
     '.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.jsonl', '.log', '.xml', '.yaml', '.yml',
     '.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java', '.kt', '.swift', '.sql', '.css',
     '.sh', '.toml', '.ini', '.conf', '.properties',

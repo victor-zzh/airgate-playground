@@ -12,6 +12,9 @@ import (
 
 const defaultClaudeMaxTokens = 4096
 
+// 开启 thinking 时 max_tokens 的保守封顶（低于当前所有 Claude 模型的 max_output）
+const maxClaudeThinkingMaxTokens = 60000
+
 type chatForwardPlan struct {
 	Platform      string
 	Model         string
@@ -81,11 +84,19 @@ func compileChatForwardPlan(platform string, body []byte) (*chatForwardPlan, err
 
 	switch platform {
 	case "openai":
+		// xhigh 是前端为 Claude thinking 提供的档位，OpenAI reasoning_effort 枚举
+		// 只到 high，透传会被上游 400 拒绝，降级到 high
+		outBody := body
+		if strings.EqualFold(strings.TrimSpace(req.ReasoningEffort), "xhigh") {
+			if clamped, err := clampReasoningEffort(body, "high"); err == nil {
+				outBody = clamped
+			}
+		}
 		return &chatForwardPlan{
 			Platform:      platform,
 			Model:         req.Model,
 			Path:          "/v1/chat/completions",
-			Body:          body,
+			Body:          outBody,
 			ResponseModel: req.Model,
 		}, nil
 	case "claude", "anthropic":
@@ -107,6 +118,20 @@ func compileChatForwardPlan(platform string, body []byte) (*chatForwardPlan, err
 	}
 }
 
+// clampReasoningEffort 把 body 里的 reasoning_effort 改为 to，保留其余字段。
+func clampReasoningEffort(body []byte, to string) ([]byte, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return body, err
+	}
+	raw, err := json.Marshal(to)
+	if err != nil {
+		return body, err
+	}
+	m["reasoning_effort"] = raw
+	return json.Marshal(m)
+}
+
 func compileClaudeMessagesBody(req openAIChatRequest) ([]byte, error) {
 	out := claudeMessagesRequest{
 		Model:     req.Model,
@@ -115,7 +140,13 @@ func compileClaudeMessagesBody(req openAIChatRequest) ([]byte, error) {
 	}
 	if budget, ok := claudeThinkingBudgets[strings.ToLower(strings.TrimSpace(req.ReasoningEffort))]; ok {
 		out.Thinking = &claudeThinking{Type: "enabled", BudgetTokens: budget}
-		out.MaxTokens = budget + defaultClaudeMaxTokens
+		// max_tokens 须 > budget；封顶在保守上限内（当前所有 Claude 模型 max_output ≥64000，
+		// budget 最大 32768，budget+4096≤36864 始终安全，上限仅防目录覆盖层配异常值）
+		maxTokens := budget + defaultClaudeMaxTokens
+		if maxTokens > maxClaudeThinkingMaxTokens {
+			maxTokens = maxClaudeThinkingMaxTokens
+		}
+		out.MaxTokens = maxTokens
 	}
 
 	for _, msg := range req.Messages {

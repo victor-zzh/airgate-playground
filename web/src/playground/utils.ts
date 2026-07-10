@@ -240,7 +240,7 @@ function escapeHtml(text: string) {
 
 async function urlToDataURL(url: string): Promise<string | null> {
   try {
-    const resp = await fetch(url);
+    const resp = await fetch(url, { credentials: 'include' });
     if (!resp.ok) return null;
     const blob = await resp.blob();
     return await new Promise<string>((resolve, reject) => {
@@ -257,23 +257,34 @@ async function urlToDataURL(url: string): Promise<string | null> {
 // 消息 → text/html 剪贴板片段：文本转义、图片内联为 data URL <img>，
 // 粘贴到微信/Word/邮件等富文本编辑器时文字和图片一起带过去。
 export async function messageContentToClipboardHtml(content: string): Promise<string> {
-  const parts: string[] = [];
-  const pushText = (text: string) => {
-    const trimmed = text.trim();
-    if (trimmed) parts.push(`<div>${escapeHtml(trimmed).replace(/\n/g, '<br>')}</div>`);
-  };
-
+  // 用局部正则，避免与共享的全局 IMAGE_MARKDOWN_RE 争用 lastIndex（await 期间会被打断）
+  const re = new RegExp(IMAGE_MARKDOWN_RE.source, 'g');
+  type Seg = { kind: 'text'; text: string } | { kind: 'img'; url: string };
+  const segs: Seg[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
-  IMAGE_MARKDOWN_RE.lastIndex = 0;
-  while ((match = IMAGE_MARKDOWN_RE.exec(content)) !== null) {
-    pushText(content.slice(lastIndex, match.index));
-    const url = match[1];
-    const src = url.startsWith('data:') ? url : (await urlToDataURL(url)) || url;
-    parts.push(`<img src="${escapeHtml(src)}" alt="">`);
+  while ((match = re.exec(content)) !== null) {
+    segs.push({ kind: 'text', text: content.slice(lastIndex, match.index) });
+    segs.push({ kind: 'img', url: match[1] });
     lastIndex = match.index + match[0].length;
   }
-  pushText(content.slice(lastIndex));
+  segs.push({ kind: 'text', text: content.slice(lastIndex) });
+
+  // 图片 URL 并行转 data URL（顺序 fetch 会让多图复制卡数秒）
+  const dataUrls = await Promise.all(
+    segs.map(seg => (seg.kind === 'img' && !seg.url.startsWith('data:') ? urlToDataURL(seg.url) : null)),
+  );
+
+  const parts: string[] = [];
+  segs.forEach((seg, i) => {
+    if (seg.kind === 'text') {
+      const trimmed = seg.text.trim();
+      if (trimmed) parts.push(`<div>${escapeHtml(trimmed).replace(/\n/g, '<br>')}</div>`);
+    } else {
+      const src = seg.url.startsWith('data:') ? seg.url : (dataUrls[i] || seg.url);
+      parts.push(`<img src="${escapeHtml(src)}" alt="">`);
+    }
+  });
   return parts.join('');
 }
 
