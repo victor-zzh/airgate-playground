@@ -70,3 +70,28 @@ describe('parseMsgDate', () => {
     expect(parseMsgDate(new Uint8Array(10))).toBe('');
   });
 });
+
+// 集成：用 xlsx 的 CFB.write 生成真实 CFB 容器（独立于我们的 reader），
+// 经 extractMsg 全链路（readCfb + extractMsgFields）验证端到端。
+describe('extractMsg integration (real CFB via xlsx)', () => {
+  it('reads a generated .msg end-to-end', async () => {
+    const XLSX = await import('xlsx');
+    const CFB = (XLSX as unknown as { CFB: any }).CFB;
+    const u16 = (s: string) => {
+      const b = new Uint8Array(s.length * 2);
+      for (let i = 0; i < s.length; i++) { b[i * 2] = s.charCodeAt(i) & 0xff; b[i * 2 + 1] = s.charCodeAt(i) >> 8; }
+      return b;
+    };
+    const cfb = CFB.utils.cfb_new();
+    CFB.utils.cfb_add(cfb, '/__substg1.0_0037001F', u16('季度销售汇报 Q3'));
+    CFB.utils.cfb_add(cfb, '/__substg1.0_0C1A001F', u16('张三'));
+    CFB.utils.cfb_add(cfb, '/__substg1.0_1000001F', u16('虾青素饮共售出520件'));
+    const arr = CFB.write(cfb, { type: 'array' }) as number[];
+    const u8 = new Uint8Array(arr);
+    const { extractMsg } = await import('../msg');
+    const result = extractMsg(u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength), 10_000);
+    expect(result.content).toContain('Subject: 季度销售汇报 Q3');
+    expect(result.content).toContain('From: 张三');
+    expect(result.content).toContain('虾青素饮共售出520件');
+  });
+});
