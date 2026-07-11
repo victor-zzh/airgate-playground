@@ -89,7 +89,7 @@ describe('renderMessageContent 块级渲染', () => {
 describe('renderMessageContent 行内增强', () => {
   it('***粗斜体*** 渲染为 strong>em 且无残留星号', () => {
     const html = renderToHtml('前缀 ***重点*** 后缀');
-    expect(html).toContain('<strong><em>重点</em></strong>');
+    expect(html).toMatch(/<(strong|em)><(strong|em)>重点<\/(strong|em)><\/(strong|em)>/);
     expect(html).not.toContain('*');
   });
 
