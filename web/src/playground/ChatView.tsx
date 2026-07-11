@@ -33,6 +33,9 @@ export function ChatView() {
     showImagePreview,
     interactiveMessageOptions,
     isDraggingFiles,
+    pinnedToBottom,
+    handleMessagesScroll,
+    jumpToBottom,
   } = usePlayground();
 
   const renderCopyButton = (content: string, label = 'Copy message', preventToggle = false, buttonStyle: CSSProperties = {}) => (
@@ -96,7 +99,7 @@ export function ChatView() {
 
   return (
     <>
-      <div ref={messagesAreaRef} style={styles.messagesArea}>
+      <div ref={messagesAreaRef} style={styles.messagesArea} onScroll={handleMessagesScroll}>
         {!activeId && (
           <div style={{ ...styles.emptyState, ...(isMobile ? styles.emptyStateMobile : null) }}>
             <div style={styles.emptyTitle}>{t('playground.empty_title')}</div>
@@ -232,6 +235,35 @@ export function ChatView() {
           <div style={styles.interactionNotice}>{interactionNotice}</div>
         )}
 
+        {!pinnedToBottom && (
+          <div style={{ position: 'sticky', bottom: 10, display: 'flex', justifyContent: 'center', pointerEvents: 'none', zIndex: 5 }}>
+            <button
+              type="button"
+              onClick={jumpToBottom}
+              style={{
+                pointerEvents: 'auto',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 14px',
+                fontSize: 12,
+                borderRadius: 999,
+                border: '1px solid rgba(128,128,128,0.35)',
+                background: 'var(--ag-surface, rgba(30,30,30,0.92))',
+                color: 'inherit',
+                cursor: 'pointer',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+              }}
+              aria-label={t('playground.jump_to_bottom', { defaultValue: '回到底部' })}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 5v14" />
+                <path d="m19 12-7 7-7-7" />
+              </svg>
+              {t('playground.jump_to_bottom', { defaultValue: '回到底部' })}
+            </button>
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 

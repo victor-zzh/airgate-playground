@@ -115,6 +115,10 @@ export interface PlaygroundContextValue {
   messagesAreaRef: React.RefObject<HTMLDivElement | null>;
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
 
+  pinnedToBottom: boolean;
+  handleMessagesScroll: () => void;
+  jumpToBottom: () => void;
+
   createConversation: () => void;
   openConversation: (id: number) => void;
   deleteConversation: (id: number) => Promise<void>;
@@ -351,7 +355,33 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     return () => revokeBlobRegistry(registry);
   }, []);
 
+  // 滚动跟随：仅当用户"钉在底部"时才自动滚到最新内容。用户在流式输出中向上
+  // 翻看历史时（距底部超过阈值）停止跟随，翻回底部自动恢复；不与用户争夺滚动条。
+  const [pinnedToBottom, setPinnedToBottom] = useState(true);
+  const pinnedToBottomRef = useRef(true);
+  const setPinned = useCallback((pinned: boolean) => {
+    pinnedToBottomRef.current = pinned;
+    setPinnedToBottom((prev) => (prev === pinned ? prev : pinned));
+  }, []);
+
+  const handleMessagesScroll = useCallback(() => {
+    const messagesArea = messagesAreaRef.current;
+    if (!messagesArea) return;
+    // 程序化滚动总是落到底部（距离≈0），不会误触发解除跟随
+    const distanceToBottom = messagesArea.scrollHeight - messagesArea.scrollTop - messagesArea.clientHeight;
+    setPinned(distanceToBottom < 80);
+  }, [setPinned]);
+
+  const jumpToBottom = useCallback(() => {
+    setPinned(true);
+    const messagesArea = messagesAreaRef.current;
+    if (messagesArea) {
+      messagesArea.scrollTo({ top: messagesArea.scrollHeight, behavior: 'smooth' });
+    }
+  }, [setPinned]);
+
   useEffect(() => {
+    if (!pinnedToBottomRef.current) return;
     const messagesArea = messagesAreaRef.current;
     if (!messagesArea) return;
     messagesArea.scrollTo({ top: messagesArea.scrollHeight, behavior: isStreaming ? 'auto' : 'smooth' });
@@ -403,6 +433,8 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     };
     setConversations(prev => [draft, ...prev.filter(item => item.id !== DRAFT_CONVERSATION_ID)]);
     setActiveId(DRAFT_CONVERSATION_ID);
+    pinnedToBottomRef.current = true;
+    setPinnedToBottom(true);
     setMessages([]);
     setPendingImages([]);
     setPendingFiles([]);
@@ -414,6 +446,8 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
 
   const openConversation = useCallback((id: number) => {
     setActiveId(id);
+    pinnedToBottomRef.current = true;
+    setPinnedToBottom(true);
     setPendingImages([]);
     setPendingFiles([]);
     setError('');
@@ -556,6 +590,8 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     void (async () => {
       if (!canSendMessage || !activeId) return;
       pendingRefocusRef.current = true;
+      pinnedToBottomRef.current = true;
+      setPinnedToBottom(true);
       const draftInput = input;
       const draftPendingImages = pendingImages;
       const draftPendingFiles = pendingFiles;
@@ -984,6 +1020,9 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     fileInputRef,
     messagesAreaRef,
     messagesEndRef,
+    pinnedToBottom,
+    handleMessagesScroll,
+    jumpToBottom,
     createConversation,
     openConversation,
     deleteConversation,
