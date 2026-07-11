@@ -79,12 +79,18 @@ function copyVendorAssets() {
   rmSync(vendorOutDir, { force: true, recursive: true });
   mkdirSync(join(vendorOutDir, 'pdfjs'), { recursive: true });
   mkdirSync(join(vendorOutDir, 'xlsx'), { recursive: true });
+  mkdirSync(join(vendorOutDir, 'hljs'), { recursive: true });
   const pdfjsBuildDir = join(projectRoot, 'node_modules', 'pdfjs-dist', 'build');
   copyFileSync(join(pdfjsBuildDir, 'pdf.min.mjs'), join(vendorOutDir, 'pdfjs', 'pdf.min.mjs'));
   copyFileSync(join(pdfjsBuildDir, 'pdf.worker.min.mjs'), join(vendorOutDir, 'pdfjs', 'pdf.worker.min.mjs'));
   copyFileSync(
     join(projectRoot, 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js'),
     join(vendorOutDir, 'xlsx', 'xlsx.full.min.js'),
+  );
+  // 代码高亮（UMD，挂 window.hljs；含常用语言集）
+  copyFileSync(
+    join(projectRoot, 'node_modules', '@highlightjs', 'cdn-assets', 'highlight.min.js'),
+    join(vendorOutDir, 'hljs', 'highlight.min.js'),
   );
 }
 

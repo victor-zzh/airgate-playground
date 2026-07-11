@@ -1,10 +1,11 @@
-import { Children, Suspense, cloneElement, isValidElement, lazy, useState, type ReactNode } from 'react';
+import { Children, Suspense, cloneElement, isValidElement, lazy, useEffect, useState, type ReactNode } from 'react';
 import type { MessageContentOptions } from './types';
 import { styles } from './styles';
 import { copyText, formatByteSize, isSafeImageUrl, isSafeLinkUrl, splitFileBlocks, type ParsedFileBlock } from './utils';
 import { IMAGE_MARKDOWN_ITEM_RE } from './constants';
 import { isTableLine, parseMarkdownTable, type ParsedMarkdownTable, type TableAlign } from './markdownTable';
 import { buildListTree, parseListLine, type ListItemToken, type ListNode } from './markdownList';
+import { loadHighlightRuntime, normalizeHighlightLanguage } from './highlight';
 
 const MathRenderer = lazy(() => import('../MathRenderer'));
 
@@ -64,9 +65,13 @@ function renderGeneratedImage(key: string, url: string, alt: string, options: Me
   return <GeneratedImageFrame key={key} url={url} alt={alt} options={options} imageIndex={imageIndex} />;
 }
 
+// 裸 URL 常被中英文标点收尾，链接化时把结尾标点留在正文里
+const TRAILING_URL_PUNCT_RE = /[.,;:!?)）\]。，；：、！？…'"]+$/;
+
 export function renderInlineMarkdown(text: string, keyPrefix: string, options: MessageContentOptions = {}) {
   const nodes: ReactNode[] = [];
-  const inlineRe = /(`([^`]+)`|\\\(([\s\S]*?)\\\)|(?<!\\)\$(?!\s)([^\n$]*?\S)(?<!\\)\$|!\[([^\]]*)\]\(([^)\s]+)\)|\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_|~~([^~\n]+)~~)/g;
+  // ***粗斜体*** 必须排在 ** 之前，否则 ** 会吃掉前两颗星导致渲染残缺
+  const inlineRe = /(`([^`]+)`|\\\(([\s\S]*?)\\\)|(?<!\\)\$(?!\s)([^\n$]*?\S)(?<!\\)\$|!\[([^\]]*)\]\(([^)\s]+)\)|\[([^\]]+)\]\(([^)\s]+)\)|\*\*\*([^*\n]+)\*\*\*|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_|~~([^~\n]+)~~|(https?:\/\/[^\s<>"'`]+))/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -83,9 +88,11 @@ export function renderInlineMarkdown(text: string, keyPrefix: string, options: M
     const imageUrl = match[6];
     const linkText = match[7];
     const linkUrl = match[8];
-    const boldText = match[9] || match[10];
-    const italicText = match[11] || match[12];
-    const strikeText = match[13];
+    const boldItalicText = match[9];
+    const boldText = match[10] || match[11];
+    const italicText = match[12] || match[13];
+    const strikeText = match[14];
+    const bareUrl = match[15];
 
     if (inlineCode) {
       nodes.push(<code key={key} style={styles.markdownInlineCode}>{inlineCode}</code>);
@@ -99,12 +106,27 @@ export function renderInlineMarkdown(text: string, keyPrefix: string, options: M
           {renderInlineMarkdown(linkText, `${key}-link`, options)}
         </a>,
       );
+    } else if (boldItalicText) {
+      nodes.push(
+        <strong key={key}><em>{renderInlineMarkdown(boldItalicText, `${key}-bi`, options)}</em></strong>,
+      );
     } else if (boldText) {
       nodes.push(<strong key={key}>{renderInlineMarkdown(boldText, `${key}-bold`, options)}</strong>);
     } else if (italicText) {
       nodes.push(<em key={key}>{renderInlineMarkdown(italicText, `${key}-em`, options)}</em>);
     } else if (strikeText) {
       nodes.push(<del key={key} style={styles.markdownStrike}>{renderInlineMarkdown(strikeText, `${key}-del`, options)}</del>);
+    } else if (bareUrl) {
+      const trailing = TRAILING_URL_PUNCT_RE.exec(bareUrl)?.[0] ?? '';
+      const cleanUrl = trailing ? bareUrl.slice(0, -trailing.length) : bareUrl;
+      if (cleanUrl && isSafeLinkUrl(cleanUrl)) {
+        nodes.push(
+          <a key={key} href={cleanUrl} style={styles.markdownLink} target="_blank" rel="noreferrer">{cleanUrl}</a>,
+        );
+        if (trailing) nodes.push(trailing);
+      } else {
+        nodes.push(match[0]);
+      }
     } else {
       nodes.push(match[0]);
     }
@@ -130,11 +152,38 @@ function renderMath(tex: string, key: string, displayMode: boolean) {
   );
 }
 
-// 代码块：语言标签 + 一键复制。样式由 shell 承载（markdownCodeBlock 只管 pre 本体）。
+// 代码块：语言标签 + 一键复制 + 异步语法高亮。样式由 shell 承载（markdownCodeBlock 只管 pre 本体）。
+// 高亮是渐进增强：hljs 未加载/语言未知/加载失败时保持纯文本。流式输出时内容逐 chunk 变化，
+// 防抖 150ms 避免每个 token 都跑一遍 tokenizer。
 function CodeBlock({ language, code }: { language: string; code: string }) {
   const [copied, setCopied] = useState(false);
+  const [highlighted, setHighlighted] = useState('');
+
+  useEffect(() => {
+    const lang = normalizeHighlightLanguage(language);
+    if (!lang || !code) {
+      setHighlighted('');
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      loadHighlightRuntime()
+        .then((hljs) => {
+          if (cancelled || !hljs.getLanguage(lang)) return;
+          // hljs.highlight 会转义非 token 文本，输出可安全注入
+          const { value } = hljs.highlight(code, { language: lang, ignoreIllegals: true });
+          if (!cancelled) setHighlighted(value);
+        })
+        .catch(() => {});
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [language, code]);
+
   return (
-    <div style={styles.markdownCodeShell}>
+    <div style={styles.markdownCodeShell} className="pg-md-code">
       <div style={styles.markdownCodeHeader}>
         <span style={styles.markdownCodeLang}>{language || 'code'}</span>
         <button
@@ -163,7 +212,12 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
           {copied ? '已复制' : '复制'}
         </button>
       </div>
-      <pre style={styles.markdownCodeBlock}><code>{code}</code></pre>
+      {highlighted ? (
+        // hljs.highlight 会转义非 token 文本，输出可安全注入
+        <pre style={styles.markdownCodeBlock}><code dangerouslySetInnerHTML={{ __html: highlighted }} /></pre>
+      ) : (
+        <pre style={styles.markdownCodeBlock}><code>{code}</code></pre>
+      )}
     </div>
   );
 }

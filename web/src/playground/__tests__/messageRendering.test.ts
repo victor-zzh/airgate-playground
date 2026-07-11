@@ -85,3 +85,43 @@ describe('renderMessageContent 块级渲染', () => {
     expect(html).toContain('<details');
   });
 });
+
+describe('renderMessageContent 行内增强', () => {
+  it('***粗斜体*** 渲染为 strong>em 且无残留星号', () => {
+    const html = renderToHtml('前缀 ***重点*** 后缀');
+    expect(html).toContain('<strong><em>重点</em></strong>');
+    expect(html).not.toContain('*');
+  });
+
+  it('裸 URL 自动转为可点击链接', () => {
+    const html = renderToHtml('文档见 https://docs.example.com/guide 了解详情');
+    expect(html).toContain('<a href="https://docs.example.com/guide"');
+    expect(html).toContain('target="_blank"');
+  });
+
+  it('裸 URL 结尾的中文标点留在正文', () => {
+    const html = renderToHtml('详见 https://example.com/a。');
+    expect(html).toContain('href="https://example.com/a"');
+    expect(html).toContain('。');
+    expect(html).not.toContain('href="https://example.com/a。"');
+  });
+
+  it('markdown 链接不被裸 URL 规则重复处理', () => {
+    const html = renderToHtml('[点这里](https://example.com/x)');
+    const anchors = html.match(/<a /g);
+    expect(anchors?.length).toBe(1);
+    expect(html).toContain('点这里');
+  });
+
+  it('加粗内的 URL 也可点击', () => {
+    const html = renderToHtml('**访问 https://example.com 查看**');
+    expect(html).toContain('<strong>');
+    expect(html).toContain('href="https://example.com"');
+  });
+
+  it('代码块外壳带高亮作用域 class', () => {
+    const html = renderToHtml('```go\nfmt.Println(1)\n```');
+    expect(html).toContain('pg-md-code');
+    expect(html).toContain('fmt.Println(1)');
+  });
+});
