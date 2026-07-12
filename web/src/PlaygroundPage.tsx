@@ -58,7 +58,7 @@ function PlaygroundShell() {
                 style={styles.toggleBtn}
                 className="pg-sidebar-collapse-button"
                 onClick={() => setSidebarOpen(false)}
-                aria-label="Collapse conversations"
+                aria-label={t('playground.collapse_conversations')}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M15 18l-6-6 6-6" />
@@ -114,7 +114,7 @@ function PlaygroundShell() {
         </div>
       ) : (
         <div style={{ ...styles.sidebarRail, ...(isMobile ? styles.sidebarRailMobile : null) }}>
-          <button style={styles.toggleBtn} className="pg-sidebar-collapse-button" onClick={() => setSidebarOpen(true)} aria-label="Expand conversations">
+          <button style={styles.toggleBtn} className="pg-sidebar-collapse-button" onClick={() => setSidebarOpen(true)} aria-label={t('playground.expand_conversations')}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
               <path d="M9 18l6-6-6-6" />
             </svg>
@@ -146,8 +146,8 @@ function ImagePreviewOverlay() {
         <img src={current.url} alt={current.alt} style={styles.imagePreviewLarge} />
         {hasNav && (
           <>
-            <button type="button" style={{ ...styles.imagePreviewNavBtn, left: 12 }} onClick={() => showNextPreviewImage(-1)} aria-label={t('playground.previous_image', { defaultValue: 'Previous image' })}>‹</button>
-            <button type="button" style={{ ...styles.imagePreviewNavBtn, right: 12 }} onClick={() => showNextPreviewImage(1)} aria-label={t('playground.next_image', { defaultValue: 'Next image' })}>›</button>
+            <button type="button" style={{ ...styles.imagePreviewNavBtn, left: 12 }} onClick={() => showNextPreviewImage(-1)} aria-label={t('playground.previous_image')}>‹</button>
+            <button type="button" style={{ ...styles.imagePreviewNavBtn, right: 12 }} onClick={() => showNextPreviewImage(1)} aria-label={t('playground.next_image')}>›</button>
             <div style={styles.imagePreviewCounter}>{previewImage.index + 1} / {previewImage.images.length}</div>
           </>
         )}

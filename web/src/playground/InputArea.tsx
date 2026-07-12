@@ -52,7 +52,6 @@ export function InputArea() {
             {pendingImages.map(image => {
               const sizeLabel = image.compressed && image.originalBytes && image.finalBytes
                 ? t('playground.attachment_optimized', {
-                  defaultValue: '已优化 {{from}} → {{to}}',
                   from: formatByteSize(image.originalBytes),
                   to: formatByteSize(image.finalBytes),
                 })
@@ -83,7 +82,7 @@ export function InputArea() {
                         pointerEvents: 'none',
                       }}
                     >
-                      {t('playground.attachment_optimized_badge', { defaultValue: '已优化' })}
+                      {t('playground.attachment_optimized_badge')}
                     </span>
                   )}
                   <button
@@ -104,7 +103,7 @@ export function InputArea() {
             })}
             {pendingFiles.map(file => {
               const metaParts = [formatByteSize(file.size)];
-              if (file.truncated) metaParts.push(t('playground.attachment_truncated_badge', { defaultValue: '已截断' }));
+              if (file.truncated) metaParts.push(t('playground.attachment_truncated_badge'));
               const tooltip = [file.name, metaParts.filter(Boolean).join(' · '), file.warningText].filter(Boolean).join('\n');
               return (
                 <div
@@ -156,7 +155,7 @@ export function InputArea() {
                   </svg>
                 </div>
                 <div style={styles.filePreviewName}>
-                  {t('playground.attachment_processing', { defaultValue: '解析附件中…' })}
+                  {t('playground.attachment_processing')}
                 </div>
               </div>
             )}
@@ -221,11 +220,11 @@ export function InputArea() {
               onMouseDown={event => event.preventDefault()}
               onClick={() => setThinkingVisible(value => !value)}
               title={thinkingVisible
-                ? t('playground.hide_thinking', { defaultValue: 'Hide Thinking' })
-                : t('playground.show_thinking', { defaultValue: 'Show Thinking' })}
+                ? t('playground.hide_thinking')
+                : t('playground.show_thinking')}
               aria-label={thinkingVisible
-                ? t('playground.hide_thinking', { defaultValue: 'Hide Thinking' })
-                : t('playground.show_thinking', { defaultValue: 'Show Thinking' })}
+                ? t('playground.hide_thinking')
+                : t('playground.show_thinking')}
               aria-pressed={thinkingVisible}
             >
               {thinkingVisible ? (
@@ -244,7 +243,7 @@ export function InputArea() {
                   <path d="M4 4l16 16" />
                 </svg>
               )}
-              {t('playground.thinking_title', { defaultValue: 'Thinking' })}
+              {t('playground.thinking_title')}
             </button>
 
             <button
@@ -253,12 +252,12 @@ export function InputArea() {
               onMouseDown={event => event.preventDefault()}
               onClick={triggerImagePicker}
               disabled={isActiveConversationStreaming}
-              title={t('playground.attach_files', { defaultValue: 'Attach files' })}
+              title={t('playground.attach_files')}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
-              {t('playground.file', { defaultValue: 'File' })}
+              {t('playground.file')}
             </button>
 
             {isActiveConversationStreaming ? (

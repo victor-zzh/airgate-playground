@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { createElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import i18n from 'i18next';
+import { initReactI18next } from 'react-i18next';
 import { renderMessageContent } from '../MessageRendering';
+import zh from '../../../../../../core/airgate-core/web/src/i18n/zh.json';
+
+i18n.use(initReactI18next).init({
+  resources: { zh: { translation: zh } },
+  lng: 'zh',
+  interpolation: { escapeValue: false },
+});
 
 function renderToHtml(content: string): string {
   return renderToStaticMarkup(createElement('div', null, renderMessageContent(content) as ReactNode));

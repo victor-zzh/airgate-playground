@@ -756,7 +756,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   const addAttachments = useCallback(async (files: File[]) => {
     if (!files.length) return;
     if (processingAttachmentsRef.current) {
-      setError(t('playground.attachment.busy', { defaultValue: '正在解析附件，请稍候再添加' }));
+      setError(t('playground.attachment.busy'));
       return;
     }
     processingAttachmentsRef.current = true;
@@ -916,8 +916,8 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
 
   const handleMessageCopy = useCallback((content: string) => {
     void copyMessageContent(content)
-      .then(() => setInteractionNotice(t('playground.copied', { defaultValue: 'Copied' })))
-      .catch(() => setInteractionNotice(t('playground.copy_failed', { defaultValue: 'Copy failed' })));
+      .then(() => setInteractionNotice(t('playground.copied')))
+      .catch(() => setInteractionNotice(t('playground.copy_failed')));
   }, [t]);
 
   const showImagePreview = useCallback((images: Array<{ url: string; alt: string }>, index: number) => {

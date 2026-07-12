@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { MessageContentOptions } from './types';
 import { styles } from './styles';
 import { copyText, formatByteSize, splitFileBlocks, type ParsedFileBlock } from './utils';
@@ -66,6 +67,7 @@ function renderMath(tex: string, key: string, displayMode: boolean) {
 // 高亮是渐进增强：hljs 未加载/语言未知/加载失败时保持纯文本。流式输出时内容逐 chunk 变化，
 // 防抖 150ms 避免每个 token 都跑一遍 tokenizer。
 function CodeBlock({ language, code }: { language: string; code: string }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const [highlighted, setHighlighted] = useState('');
 
@@ -99,7 +101,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
         <button
           type="button"
           style={{ ...styles.markdownCodeCopyBtn, ...(copied ? styles.markdownCodeCopyBtnDone : null) }}
-          aria-label="复制代码"
+          aria-label={t('playground.copy_code')}
           onClick={() => {
             void copyText(code)
               .then(() => {
@@ -119,7 +121,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
             </svg>
           )}
-          {copied ? '已复制' : '复制'}
+          {copied ? t('playground.copied') : t('common.copy')}
         </button>
       </div>
       {highlighted ? (
@@ -179,6 +181,7 @@ const fileBlockChipStyles = {
 
 // 消息里的 <file> 块折叠为 chip，展开时才渲染内容（200k 字符的抽取文本不能直出气泡）。
 function FileBlockChip({ block }: { block: ParsedFileBlock }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const sizeLabel = formatByteSize(block.size);
   return (
@@ -193,7 +196,7 @@ function FileBlockChip({ block }: { block: ParsedFileBlock }) {
         </svg>
         <span style={fileBlockChipStyles.name} title={block.name}>{block.name}</span>
         {sizeLabel && <span style={fileBlockChipStyles.meta}>{sizeLabel}</span>}
-        {block.truncated && <span style={fileBlockChipStyles.badge}>已截断</span>}
+        {block.truncated && <span style={fileBlockChipStyles.badge}>{t('playground.attachment_truncated_badge')}</span>}
       </summary>
       {open && <div style={fileBlockChipStyles.content}>{block.content}</div>}
     </details>

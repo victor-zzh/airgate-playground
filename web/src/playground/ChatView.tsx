@@ -125,8 +125,8 @@ export function ChatView() {
                 {!isUser && msg.reasoning && thinkingVisible && (
                   <details style={styles.reasoningBox} open>
                     <summary style={styles.reasoningSummary}>
-                      <span>{t('playground.thinking_title', { defaultValue: 'Thinking' })}</span>
-                      {renderCopyButton(msg.reasoning, t('playground.copy_thinking', { defaultValue: 'Copy thinking' }), true)}
+                      <span>{t('playground.thinking_title')}</span>
+                      {renderCopyButton(msg.reasoning, t('playground.copy_thinking'), true)}
                     </summary>
                     <div style={styles.reasoningContent}>
                       {renderMessageContent(msg.reasoning, interactiveMessageOptions)}
@@ -154,8 +154,8 @@ export function ChatView() {
               {streamReasoning && thinkingVisible && (
                 <details style={styles.reasoningBox} open>
                   <summary style={styles.reasoningSummary}>
-                    <span>{t('playground.thinking_title', { defaultValue: 'Thinking' })}</span>
-                    {renderCopyButton(streamReasoning, t('playground.copy_thinking', { defaultValue: 'Copy thinking' }), true)}
+                    <span>{t('playground.thinking_title')}</span>
+                    {renderCopyButton(streamReasoning, t('playground.copy_thinking'), true)}
                   </summary>
                   <div style={styles.reasoningContent}>
                     {renderMessageContent(streamReasoning, interactiveMessageOptions)}
@@ -185,7 +185,7 @@ export function ChatView() {
               <circle cx="12" cy="12" r="10" />
               <path d="M12 8v4m0 4h.01" />
             </svg>
-            <span style={styles.errorMessage}>{t('playground.response_unfinished', { defaultValue: 'Response was interrupted before the assistant replied.' })}</span>
+            <span style={styles.errorMessage}>{t('playground.response_unfinished')}</span>
             <button
               type="button"
               style={styles.recoverableRetryBtn}
@@ -254,13 +254,13 @@ export function ChatView() {
                 cursor: 'pointer',
                 boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
               }}
-              aria-label={t('playground.jump_to_bottom', { defaultValue: '回到底部' })}
+              aria-label={t('playground.jump_to_bottom')}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M12 5v14" />
                 <path d="m19 12-7 7-7-7" />
               </svg>
-              {t('playground.jump_to_bottom', { defaultValue: '回到底部' })}
+              {t('playground.jump_to_bottom')}
             </button>
           </div>
         )}
@@ -293,7 +293,7 @@ export function ChatView() {
               background: 'rgba(0, 0, 0, 0.35)',
             }}
           >
-            {t('playground.drop_to_attach', { defaultValue: '松开以添加附件' })}
+            {t('playground.drop_to_attach')}
           </div>
         </div>
       )}
