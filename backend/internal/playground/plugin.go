@@ -23,6 +23,8 @@ type Plugin struct {
 	toolCfg *toolSettings
 	// searchProvider 测试注入口;nil 时按配置构造 Tavily。
 	searchProvider searchProvider
+	// pdf chromedp 渲染器(generate_document 用;边车不可达时降级只出 MD)。
+	pdf *pdfRenderer
 
 	metaMu    sync.Mutex
 	metaCache map[string]modelMetaEntry
@@ -66,6 +68,9 @@ func (p *Plugin) Init(ctx sdk.PluginContext) error {
 	p.tuning = &tuning
 	toolCfg := resolveToolSettings(cfg)
 	p.toolCfg = &toolCfg
+	if toolCfg.GenerateDocumentEnabled {
+		p.pdf = newPDFRenderer(toolCfg.ChromiumCDPURL)
+	}
 
 	type dsnCandidate struct {
 		name string

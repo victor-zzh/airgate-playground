@@ -77,6 +77,21 @@ func BuildPluginInfo() sdk.PluginInfo {
 				Description: "单条消息内 web_search 的执行次数上限。",
 				Placeholder: "3",
 			},
+			{
+				Key:         "generate_document_enabled",
+				Label:       "文档生成工具",
+				Type:        "bool",
+				Default:     "false",
+				Description: "开启后模型可生成 Markdown/PDF 文档交付给用户（PDF 需要 chromium 边车容器在位，不可达时自动降级只出 Markdown）。",
+			},
+			{
+				Key:         "chromium_cdp_url",
+				Label:       "Chromium 边车 CDP 地址",
+				Type:        "string",
+				Default:     "http://chromium:9222",
+				Description: "headless-shell 边车的 DevTools 端点（compose 服务名+端口，须在 internal 网络内）。",
+				Placeholder: "http://chromium:9222",
+			},
 		},
 		Capabilities: []sdk.Capability{
 			sdk.CapabilityForHostMethod(hostMethodGatewayForward),

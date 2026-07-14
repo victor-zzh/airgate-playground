@@ -44,14 +44,20 @@ type chatTool interface {
 
 // toolSettings 工具循环的运行时配置(插件设置,进程内静态)。
 type toolSettings struct {
-	WebSearchEnabled      bool
-	TavilyAPIKey          string
-	MaxIterations         int
-	MaxSearchesPerMessage int
+	WebSearchEnabled        bool
+	TavilyAPIKey            string
+	GenerateDocumentEnabled bool
+	ChromiumCDPURL          string
+	MaxIterations           int
+	MaxSearchesPerMessage   int
 }
 
 func defaultToolSettings() toolSettings {
-	return toolSettings{MaxIterations: 5, MaxSearchesPerMessage: 3}
+	return toolSettings{
+		MaxIterations:         5,
+		MaxSearchesPerMessage: 3,
+		ChromiumCDPURL:        "http://chromium:9222",
+	}
 }
 
 func resolveToolSettings(cfg sdk.PluginConfig) toolSettings {
@@ -65,6 +71,14 @@ func resolveToolSettings(cfg sdk.PluginConfig) toolSettings {
 		}
 	}
 	s.TavilyAPIKey = strings.TrimSpace(cfg.GetString("tavily_api_key"))
+	if raw := strings.TrimSpace(cfg.GetString("generate_document_enabled")); raw != "" {
+		if v, err := strconv.ParseBool(raw); err == nil {
+			s.GenerateDocumentEnabled = v
+		}
+	}
+	if raw := strings.TrimSpace(cfg.GetString("chromium_cdp_url")); raw != "" {
+		s.ChromiumCDPURL = raw
+	}
 	if raw := strings.TrimSpace(cfg.GetString("tool_loop_max_iterations")); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v > 0 && v <= 10 {
 			s.MaxIterations = v
@@ -91,6 +105,9 @@ func (p *Plugin) enabledChatTools() []chatTool {
 			provider:      provider,
 			maxPerMessage: settings.MaxSearchesPerMessage,
 		})
+	}
+	if settings.GenerateDocumentEnabled && p.svc != nil {
+		tools = append(tools, &generateDocumentTool{plugin: p})
 	}
 	return tools
 }

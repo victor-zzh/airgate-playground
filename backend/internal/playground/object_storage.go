@@ -97,6 +97,22 @@ func (s *ObjectStorage) StoreImageBytes(ctx context.Context, userID int, convers
 	}, nil
 }
 
+// StoreDocumentBytes 存储生成文档(md/pdf),与图片同走 purpose=chat 生命周期
+// (会话删除/孤儿清理自动覆盖)。
+func (s *ObjectStorage) StoreDocumentBytes(ctx context.Context, userID int, contentType, fileExtension string, data []byte) (*StoredAsset, error) {
+	asset, err := hostStoreAsset(ctx, s.host, int64(userID), "chat", contentType, fileExtension, data)
+	if err != nil {
+		return nil, err
+	}
+	return &StoredAsset{
+		ID:          asset.ID,
+		ObjectKey:   filepath.ToSlash(asset.ObjectKey),
+		PublicURL:   asset.PublicURL,
+		ContentType: asset.ContentType,
+		SizeBytes:   asset.SizeBytes,
+	}, nil
+}
+
 func (s *ObjectStorage) PublicURL(ctx context.Context, objectKey string) (string, error) {
 	return hostGetAssetURL(ctx, s.host, objectKey)
 }

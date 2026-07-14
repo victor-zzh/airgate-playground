@@ -372,6 +372,17 @@ func (s *Service) PersistMessage(ctx context.Context, userID int, req PersistMes
 	return msg, nil
 }
 
+// Storage 暴露对象存储(工具循环的文档生成用)。
+func (s *Service) Storage() *ObjectStorage {
+	return s.storage
+}
+
+// RegisterConversationAsset 把工具产物登记进 playground_assets(带会话归属,
+// 纳入孤儿清理与会话删除链路)。
+func (s *Service) RegisterConversationAsset(ctx context.Context, userID int, convID int64, asset *StoredAsset) error {
+	return s.insertAsset(ctx, userID, convID, asset)
+}
+
 // InsertToolCallAudit 工具执行审计入库(调用方负责失败降级)。
 func (s *Service) InsertToolCallAudit(ctx context.Context, rec toolCallAudit) error {
 	_, err := s.db.ExecContext(ctx,
