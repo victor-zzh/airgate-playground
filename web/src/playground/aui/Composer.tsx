@@ -1,21 +1,26 @@
-import type { ReasoningEffort } from './types';
-import { usePlayground } from './PlaygroundContext';
-import { attachmentAcceptList } from './attachments/detect';
-import { formatByteSize } from './utils';
-import { styles } from './styles';
+// 输入区：原 InputArea 的布局/附件预览/模型与 reasoning 下拉/思维链开关原样迁入，
+// 文本框换 ComposerPrimitive.Input（草稿文本由 assistant-ui composer runtime 持有）。
+// 发送路径：
+// - 文本非空：Enter/发送按钮 → composer.send() → adapter.onNew → submitUserMessage(text)
+// - 纯附件（无文本）：直接调 submitUserMessage('')，绕过 composer 的 canSend 空文本限制
+// 文本框用 render 直挂原生 <textarea>（跳过 react-textarea-autosize），保持原固定
+// 112px 高度的观感;粘贴仍走现有 handlePaste（图片/文件转附件、富文本回填）。
+import { ComposerPrimitive, useComposer, useComposerRuntime } from '@assistant-ui/react';
+import type { ReasoningEffort } from '../types';
+import { usePlayground } from '../PlaygroundContext';
+import { attachmentAcceptList } from '../attachments/detect';
+import { formatByteSize } from '../utils';
+import { styles } from '../styles';
 
 const ATTACHMENT_ACCEPT = attachmentAcceptList();
 
-export function InputArea() {
+export function Composer() {
   const {
     t,
     isMobile,
     isActiveConversationStreaming,
-    canSendMessage,
-    input,
-    setInput,
+    canSubmit,
     handlePaste,
-    handleKeyDown,
     pendingImages,
     pendingFiles,
     isProcessingAttachments,
@@ -35,18 +40,45 @@ export function InputArea() {
     setThinkingVisible,
     triggerImagePicker,
     stopStreaming,
-    sendMessage,
+    submitUserMessage,
     selectedPlatform,
     selectedModelID,
   } = usePlayground();
 
+  const composerRuntime = useComposerRuntime();
+  const composerText = useComposer(state => state.text);
+  const hasPendingAttachments = pendingImages.length > 0 || pendingFiles.length > 0;
+  const canSendMessage = canSubmit && Boolean(composerText.trim() || hasPendingAttachments);
+
+  const sendNow = () => {
+    if (!canSendMessage) return;
+    if (composerRuntime.getState().text.trim()) {
+      // 文本路径：send() 同步清空草稿并触发 adapter.onNew
+      composerRuntime.send();
+    } else {
+      // 纯附件路径：composer 草稿为空，直接提交
+      void submitUserMessage('');
+    }
+  };
+
   return (
     <div style={{ ...styles.inputArea, ...(isMobile ? styles.inputAreaMobile : null) }}>
-      <div style={{
-        ...styles.inputWrapper,
-        ...(isMobile ? styles.inputWrapperMobile : null),
-        ...(isActiveConversationStreaming ? styles.inputWrapperStreaming : null),
-      }} className="pg-input-wrapper">
+      <ComposerPrimitive.Root
+        style={{
+          ...styles.inputWrapper,
+          ...(isMobile ? styles.inputWrapperMobile : null),
+          ...(isActiveConversationStreaming ? styles.inputWrapperStreaming : null),
+        }}
+        className="pg-input-wrapper"
+        onSubmit={(event) => {
+          // Enter 走 form submit：空文本时拦下内建 composer.send()（空文本发不出），
+          // 有附件则改走纯附件路径；文本非空放行给内建 send → onNew。
+          if (!composerRuntime.getState().text.trim()) {
+            event.preventDefault();
+            if (canSendMessage) void submitUserMessage('');
+          }
+        }}
+      >
         {(pendingImages.length > 0 || pendingFiles.length > 0 || isProcessingAttachments) && (
           <div style={styles.imagePreviewList}>
             {pendingImages.map(image => {
@@ -162,16 +194,14 @@ export function InputArea() {
           </div>
         )}
 
-        <textarea
+        <ComposerPrimitive.Input
           ref={inputRef}
-          style={styles.textarea}
-          value={input}
-          onChange={event => setInput(event.target.value)}
-          onPaste={handlePaste}
-          onKeyDown={handleKeyDown}
+          render={<textarea style={styles.textarea} rows={4} />}
           placeholder={t('playground.input_placeholder')}
-          rows={4}
           disabled={isActiveConversationStreaming}
+          onPaste={handlePaste}
+          addAttachmentOnPaste={false}
+          cancelOnEscape={false}
         />
 
         <input
@@ -281,7 +311,7 @@ export function InputArea() {
                   opacity: canSendMessage ? 1 : 0.4,
                 }}
                 onMouseDown={event => event.preventDefault()}
-                onClick={sendMessage}
+                onClick={sendNow}
                 disabled={!canSendMessage}
                 title={selectedPlatform && selectedModelID ? undefined : t('playground.select_model_first')}
               >
@@ -294,7 +324,7 @@ export function InputArea() {
             )}
           </div>
         </div>
-      </div>
+      </ComposerPrimitive.Root>
     </div>
   );
 }

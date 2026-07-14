@@ -54,6 +54,7 @@ import { processAttachments } from './attachments/processor';
 import { formatAttachmentErrors, formatAttachmentIssue } from './attachments/issues';
 import { styles } from './styles';
 import { CHAT_MODEL_REGISTRY } from './modelConfig';
+import { appendStreamPart, type StreamPart } from './aui/streamState';
 
 declare global {
   interface Window {
@@ -61,6 +62,13 @@ declare global {
       confirm?: (message: string, options?: { title?: string; danger?: boolean }) => Promise<boolean>;
     };
   }
+}
+
+// ChatRuntimeProvider 注入的 composer 文本操作口：PlaygroundContext 在
+// 粘贴回填/发送失败恢复时经它读写 assistant-ui composer 的草稿文本。
+export interface ComposerTextApi {
+  getText: () => string;
+  setText: (text: string) => void;
 }
 
 export interface PlaygroundContextValue {
@@ -71,8 +79,7 @@ export interface PlaygroundContextValue {
   activeId: number | null;
   messages: Message[];
   isStreaming: boolean;
-  streamContent: string;
-  streamReasoning: string;
+  streamParts: readonly StreamPart[];
   streamConversationId: number | null;
   isActiveConversationStreaming: boolean;
   hasRecoverableUserMessage: boolean;
@@ -86,12 +93,12 @@ export interface PlaygroundContextValue {
   modelOptions: SelectOption[];
   isDraggingFiles: boolean;
 
-  input: string;
-  setInput: React.Dispatch<React.SetStateAction<string>>;
   pendingImages: PendingImage[];
   pendingFiles: PendingFile[];
   isProcessingAttachments: boolean;
-  canSendMessage: boolean;
+  // 平台/模型已就绪且当前无流式、无附件处理中——不含"内容非空"判断
+  // （草稿文本在 composer runtime 里，由 Composer 组件合入判断）。
+  canSubmit: boolean;
 
   error: string;
   retryRequest: RetryRequest | null;
@@ -107,22 +114,15 @@ export interface PlaygroundContextValue {
   isMobile: boolean;
   sidebarOpen: boolean;
   setSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  hoveredCopyTarget: string | null;
-  setHoveredCopyTarget: React.Dispatch<React.SetStateAction<string | null>>;
 
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
-  messagesAreaRef: React.RefObject<HTMLDivElement | null>;
-  messagesEndRef: React.RefObject<HTMLDivElement | null>;
-
-  pinnedToBottom: boolean;
-  handleMessagesScroll: () => void;
-  jumpToBottom: () => void;
+  composerApiRef: React.MutableRefObject<ComposerTextApi | null>;
 
   createConversation: () => void;
   openConversation: (id: number) => void;
   deleteConversation: (id: number) => Promise<void>;
-  sendMessage: () => void;
+  submitUserMessage: (text: string) => Promise<void>;
   stopStreaming: () => void;
   regenerateLastResponse: () => void;
   regenerateUnfinishedResponse: () => void;
@@ -134,7 +134,6 @@ export interface PlaygroundContextValue {
   triggerImagePicker: () => void;
   handleAttachmentChange: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   handlePaste: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void;
-  handleKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   renderNativeSelect: (props: {
     id: string;
     value: string;
@@ -162,10 +161,8 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [messages, setMessagesRaw] = useState<Message[]>([]);
   const [streamConversationId, setStreamConversationId] = useState<number | null>(null);
-  const [streamContent, setStreamContent] = useState('');
-  const [streamReasoning, setStreamReasoning] = useState('');
+  const [streamParts, setStreamParts] = useState<readonly StreamPart[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [isProcessingAttachments, setIsProcessingAttachments] = useState(false);
@@ -186,17 +183,16 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
   const [interactionNotice, setInteractionNotice] = useState('');
   const [previewImage, setPreviewImage] = useState<ImagePreviewState | null>(null);
-  const [hoveredCopyTarget, setHoveredCopyTarget] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(() => (
     typeof window !== 'undefined' ? window.innerWidth <= MOBILE_BREAKPOINT : false
   ));
 
-  const messagesAreaRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // 由 ChatRuntimeProvider 挂载后填充；未挂载时为 null（相关操作静默跳过）
+  const composerApiRef = useRef<ComposerTextApi | null>(null);
   const activeIdRef = useRef<number | null>(null);
   const skipNextMessagesLoadRef = useRef<number | null>(null);
   const pendingRefocusRef = useRef(false);
@@ -289,12 +285,11 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     messages.length > 0 &&
     messages[messages.length - 1]?.role === 'user',
   );
-  const canSendMessage = Boolean(
+  const canSubmit = Boolean(
     selectedPlatform &&
     selectedModelID &&
     !isStreaming &&
-    !isProcessingAttachments &&
-    (input.trim() || pendingImages.length > 0 || pendingFiles.length > 0),
+    !isProcessingAttachments,
   );
 
   const resolveGroupID = useCallback(() => activeConversation?.group_id || 0, [activeConversation?.group_id]);
@@ -355,37 +350,8 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     return () => revokeBlobRegistry(registry);
   }, []);
 
-  // 滚动跟随：仅当用户"钉在底部"时才自动滚到最新内容。用户在流式输出中向上
-  // 翻看历史时（距底部超过阈值）停止跟随，翻回底部自动恢复；不与用户争夺滚动条。
-  const [pinnedToBottom, setPinnedToBottom] = useState(true);
-  const pinnedToBottomRef = useRef(true);
-  const setPinned = useCallback((pinned: boolean) => {
-    pinnedToBottomRef.current = pinned;
-    setPinnedToBottom((prev) => (prev === pinned ? prev : pinned));
-  }, []);
-
-  const handleMessagesScroll = useCallback(() => {
-    const messagesArea = messagesAreaRef.current;
-    if (!messagesArea) return;
-    // 程序化滚动总是落到底部（距离≈0），不会误触发解除跟随
-    const distanceToBottom = messagesArea.scrollHeight - messagesArea.scrollTop - messagesArea.clientHeight;
-    setPinned(distanceToBottom < 80);
-  }, [setPinned]);
-
-  const jumpToBottom = useCallback(() => {
-    setPinned(true);
-    const messagesArea = messagesAreaRef.current;
-    if (messagesArea) {
-      messagesArea.scrollTo({ top: messagesArea.scrollHeight, behavior: 'smooth' });
-    }
-  }, [setPinned]);
-
-  useEffect(() => {
-    if (!pinnedToBottomRef.current) return;
-    const messagesArea = messagesAreaRef.current;
-    if (!messagesArea) return;
-    messagesArea.scrollTo({ top: messagesArea.scrollHeight, behavior: isStreaming ? 'auto' : 'smooth' });
-  }, [isStreaming, messages, streamContent, streamReasoning]);
+  // 滚动跟随/跳底已迁移到 assistant-ui 的 ThreadPrimitive.Viewport（autoScroll）
+  // 与 ThreadPrimitive.ScrollToBottom，此处不再持有滚动状态。
 
   useEffect(() => {
     if (!isStreaming && pendingRefocusRef.current) {
@@ -433,8 +399,6 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     };
     setConversations(prev => [draft, ...prev.filter(item => item.id !== DRAFT_CONVERSATION_ID)]);
     setActiveId(DRAFT_CONVERSATION_ID);
-    pinnedToBottomRef.current = true;
-    setPinnedToBottom(true);
     setMessages([]);
     setPendingImages([]);
     setPendingFiles([]);
@@ -446,8 +410,6 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
 
   const openConversation = useCallback((id: number) => {
     setActiveId(id);
-    pinnedToBottomRef.current = true;
-    setPinnedToBottom(true);
     setPendingImages([]);
     setPendingFiles([]);
     setError('');
@@ -476,8 +438,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
 
   const finishStreaming = useCallback(() => {
     setIsStreaming(false);
-    setStreamContent('');
-    setStreamReasoning('');
+    setStreamParts([]);
     setStreamConversationId(null);
     abortRef.current = null;
   }, []);
@@ -506,8 +467,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     setRetryRequest(null);
     setIsStreaming(true);
     setStreamConversationId(conversationID);
-    setStreamContent('');
-    setStreamReasoning('');
+    setStreamParts([]);
 
     const abort = new AbortController();
     abortRef.current = abort;
@@ -538,12 +498,13 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
         baseRequest,
         {
           onData: (text) => {
-            accumulated += replaceBase64WithBlobUrls(text, blobUrlRegistryRef.current);
-            setStreamContent(accumulated);
+            const chunk = replaceBase64WithBlobUrls(text, blobUrlRegistryRef.current);
+            accumulated += chunk;
+            setStreamParts(prev => appendStreamPart(prev, 'text', chunk));
           },
           onReasoning: (text) => {
             accumulatedReasoning += text;
-            setStreamReasoning(accumulatedReasoning);
+            setStreamParts(prev => appendStreamPart(prev, 'reasoning', text));
           },
           onDone: async (usage) => {
             if (!accumulated) {
@@ -586,113 +547,118 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     }
   }, [finishStreaming, reasoningEffort, setMessages, t]);
 
-  const sendMessage = useCallback(() => {
-    void (async () => {
-      if (!canSendMessage || !activeId) return;
-      pendingRefocusRef.current = true;
-      pinnedToBottomRef.current = true;
-      setPinnedToBottom(true);
-      const draftInput = input;
-      const draftPendingImages = pendingImages;
-      const draftPendingFiles = pendingFiles;
-      const previousMessages = messages;
-      const content = messageContentWithAttachments(draftInput, draftPendingImages, draftPendingFiles);
-      const groupID = resolveGroupID();
-      let conversationID = activeId;
-      let conversationCreated = false;
-      let userMessagePersisted = false;
-      const localUserMessage: Message = {
-        id: Date.now(),
-        conversation_id: activeId,
+  // 发送用户消息。text 由调用方入参化：
+  // - 文本路径：assistant-ui composer.send() → adapter.onNew 取 text parts 后调用
+  //   （此时 composer 已同步清空草稿，等价旧 setInput('') 时序）；
+  // - 纯附件路径：Composer 发送按钮直接以 text='' 调用。
+  // 失败且用户消息未持久化时，草稿文本经 composerApiRef 回填（等价旧 setInput(draftInput)）。
+  const submitUserMessage = useCallback(async (text: string) => {
+    const restoreComposerText = () => {
+      if (text) composerApiRef.current?.setText(text);
+    };
+    if (!canSubmit || !activeId) {
+      // composer 已先清空草稿，守卫拦下时须还原，避免文本凭空丢失
+      restoreComposerText();
+      return;
+    }
+    if (!text.trim() && pendingImages.length === 0 && pendingFiles.length === 0) return;
+    pendingRefocusRef.current = true;
+    const draftPendingImages = pendingImages;
+    const draftPendingFiles = pendingFiles;
+    const previousMessages = messages;
+    const content = messageContentWithAttachments(text, draftPendingImages, draftPendingFiles);
+    const groupID = resolveGroupID();
+    let conversationID = activeId;
+    let conversationCreated = false;
+    let userMessagePersisted = false;
+    const localUserMessage: Message = {
+      id: Date.now(),
+      conversation_id: activeId,
+      role: 'user',
+      content,
+      reasoning_effort: selectedModelSupportsReasoning ? reasoningEffort : undefined,
+      platform: selectedPlatform,
+      model: selectedModelID,
+      group_id: groupID,
+      input_tokens: 0,
+      output_tokens: 0,
+      cost: 0,
+      created_at: new Date().toISOString(),
+    };
+    const requestMessages = [...messages, localUserMessage];
+
+    setPendingImages([]);
+    setPendingFiles([]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    setError('');
+    setRetryRequest(null);
+    setMessages(requestMessages);
+
+    try {
+      if (conversationID === DRAFT_CONVERSATION_ID) {
+        const conv = await api.createConversation({
+          title: '',
+          group_id: groupID,
+          platform: selectedPlatform,
+          model: selectedModelID,
+        });
+        conversationCreated = true;
+        conversationID = conv.id;
+        if (activeIdRef.current === DRAFT_CONVERSATION_ID) {
+          skipNextMessagesLoadRef.current = conv.id;
+          setActiveId(conv.id);
+          setMessages(prev => prev.map(msg => ({ ...msg, conversation_id: conv.id })));
+        }
+        setConversations(prev => [conv, ...prev.filter(item => item.id !== DRAFT_CONVERSATION_ID)]);
+      }
+
+      setPendingImages([]);
+      setPendingFiles([]);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+
+      await api.persistMessage({
+        conversation_id: conversationID,
         role: 'user',
         content,
         reasoning_effort: selectedModelSupportsReasoning ? reasoningEffort : undefined,
         platform: selectedPlatform,
         model: selectedModelID,
         group_id: groupID,
-        input_tokens: 0,
-        output_tokens: 0,
-        cost: 0,
-        created_at: new Date().toISOString(),
-      };
-      const requestMessages = [...messages, localUserMessage];
+      });
+      userMessagePersisted = true;
 
-      setInput('');
-      setPendingImages([]);
-      setPendingFiles([]);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      setError('');
-      setRetryRequest(null);
-      setMessages(requestMessages);
-
-      try {
-        if (conversationID === DRAFT_CONVERSATION_ID) {
-          const conv = await api.createConversation({
-            title: '',
-            group_id: groupID,
-            platform: selectedPlatform,
-            model: selectedModelID,
-          });
-          conversationCreated = true;
-          conversationID = conv.id;
-          if (activeIdRef.current === DRAFT_CONVERSATION_ID) {
-            skipNextMessagesLoadRef.current = conv.id;
-            setActiveId(conv.id);
-            setMessages(prev => prev.map(msg => ({ ...msg, conversation_id: conv.id })));
-          }
-          setConversations(prev => [conv, ...prev.filter(item => item.id !== DRAFT_CONVERSATION_ID)]);
-        }
-
-        setInput('');
-        setPendingImages([]);
-        setPendingFiles([]);
+      await streamAssistantResponse({
+        conversationID,
+        requestMessages: requestMessages.map(msg => ({ ...msg, conversation_id: conversationID })),
+        model: selectedModelID,
+        groupID,
+        platform: selectedPlatform,
+        supportsReasoning: selectedModelSupportsReasoning,
+        reasoningEffort,
+        titleContent: content,
+      });
+    } catch (err) {
+      if (!userMessagePersisted) {
+        restoreComposerText();
+        setPendingImages(draftPendingImages);
+        setPendingFiles(draftPendingFiles);
         if (fileInputRef.current) fileInputRef.current.value = '';
-
-        await api.persistMessage({
-          conversation_id: conversationID,
-          role: 'user',
-          content,
-          reasoning_effort: selectedModelSupportsReasoning ? reasoningEffort : undefined,
-          platform: selectedPlatform,
-          model: selectedModelID,
-          group_id: groupID,
-        });
-        userMessagePersisted = true;
-
-        await streamAssistantResponse({
-          conversationID,
-          requestMessages: requestMessages.map(msg => ({ ...msg, conversation_id: conversationID })),
-          model: selectedModelID,
-          groupID,
-          platform: selectedPlatform,
-          supportsReasoning: selectedModelSupportsReasoning,
-          reasoningEffort,
-          titleContent: content,
-        });
-      } catch (err) {
-        if (!userMessagePersisted) {
-          setInput(draftInput);
-          setPendingImages(draftPendingImages);
-          setPendingFiles(draftPendingFiles);
-          if (fileInputRef.current) fileInputRef.current.value = '';
-          setMessages(previousMessages);
-          if (conversationCreated && activeIdRef.current === conversationID) {
-            setConversations(prev => prev.map(item =>
-              item.id === conversationID ? { ...item, updated_at: new Date().toISOString() } : item,
-            ));
-          }
+        setMessages(previousMessages);
+        if (conversationCreated && activeIdRef.current === conversationID) {
+          setConversations(prev => prev.map(item =>
+            item.id === conversationID ? { ...item, updated_at: new Date().toISOString() } : item,
+          ));
         }
-        if (activeIdRef.current === conversationID || activeIdRef.current === DRAFT_CONVERSATION_ID) {
-          setError(err instanceof Error ? err.message : 'stream failed');
-        }
-        finishStreaming();
       }
-    })();
+      if (activeIdRef.current === conversationID || activeIdRef.current === DRAFT_CONVERSATION_ID) {
+        setError(err instanceof Error ? err.message : 'stream failed');
+      }
+      finishStreaming();
+    }
   }, [
     activeId,
-    canSendMessage,
+    canSubmit,
     finishStreaming,
-    input,
     messages,
     pendingImages,
     pendingFiles,
@@ -841,7 +807,10 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
 
     event.preventDefault();
     const text = event.clipboardData.getData('text/plain').replace(/\[Image\]/g, '').trim();
-    if (text) setInput(prev => (prev ? `${prev}\n${text}` : text));
+    if (text) {
+      const current = composerApiRef.current?.getText() ?? '';
+      composerApiRef.current?.setText(current ? `${current}\n${text}` : text);
+    }
     void addAttachments(imageFiles);
   }, [addAttachments]);
 
@@ -907,12 +876,6 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   const triggerImagePicker = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
-
-  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== 'Enter' || event.shiftKey) return;
-    event.preventDefault();
-    sendMessage();
-  }, [sendMessage]);
 
   const handleMessageCopy = useCallback((content: string) => {
     void copyMessageContent(content)
@@ -982,8 +945,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     activeId,
     messages,
     isStreaming,
-    streamContent,
-    streamReasoning,
+    streamParts,
     streamConversationId,
     isActiveConversationStreaming,
     hasRecoverableUserMessage,
@@ -995,12 +957,10 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     selectedModelSupportsReasoning,
     modelOptions,
     isDraggingFiles,
-    input,
-    setInput,
     pendingImages,
     pendingFiles,
     isProcessingAttachments,
-    canSendMessage,
+    canSubmit,
     error,
     retryRequest,
     interactionNotice,
@@ -1014,19 +974,13 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     isMobile,
     sidebarOpen,
     setSidebarOpen,
-    hoveredCopyTarget,
-    setHoveredCopyTarget,
     inputRef,
     fileInputRef,
-    messagesAreaRef,
-    messagesEndRef,
-    pinnedToBottom,
-    handleMessagesScroll,
-    jumpToBottom,
+    composerApiRef,
     createConversation,
     openConversation,
     deleteConversation,
-    sendMessage,
+    submitUserMessage,
     stopStreaming,
     regenerateLastResponse,
     regenerateUnfinishedResponse,
@@ -1038,7 +992,6 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     triggerImagePicker,
     handleAttachmentChange,
     handlePaste,
-    handleKeyDown,
     renderNativeSelect,
     interactiveMessageOptions,
   };

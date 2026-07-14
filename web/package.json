@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@assistant-ui/react": "0.14.26",
     "@doudou-start/airgate-theme": "https://github.com/DouDOU-start/airgate-sdk/releases/download/v0.2.0/airgate-theme-v0.2.0.tgz",
     "katex": "^0.16.45",
     "marked": "^18.0.6",

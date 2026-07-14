@@ -1,13 +1,16 @@
 import { useTranslation } from 'react-i18next';
 import { cssVar } from '@doudou-start/airgate-theme';
 import { PlaygroundProvider, usePlayground } from './playground/PlaygroundContext';
+import { ChatRuntimeProvider } from './playground/aui/ChatRuntimeProvider';
 import { ChatView } from './playground/ChatView';
 import { styles, keyframes } from './playground/styles';
 
 export function ChatPage() {
   return (
     <PlaygroundProvider>
-      <PlaygroundShell />
+      <ChatRuntimeProvider>
+        <PlaygroundShell />
+      </ChatRuntimeProvider>
     </PlaygroundProvider>
   );
 }

@@ -97,6 +97,27 @@ export const keyframes = `
   background: var(--ag-bg-surface, #ffffff);
   color: var(--ag-text, #111827);
 }
+
+/* 消息尾部悬浮复制按钮：hover/键盘聚焦才显出（移动端由 pg-msg-copy-visible 常显）。
+   原实现用 hoveredCopyTarget state 控制，迁 assistant-ui 后改为纯 CSS。 */
+.pg-msg-copy {
+  opacity: 0;
+  pointer-events: none;
+}
+.pg-copy-zone:hover .pg-msg-copy,
+.pg-copy-zone:focus-within .pg-msg-copy,
+.pg-msg-copy-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 跳到底部胶囊：贴底时 ThreadPrimitive.ScrollToBottom 自动 disabled，借此隐藏 */
+.pg-jump-bottom[disabled] {
+  display: none;
+}
+.pg-jump-bottom-wrap:has(> button[disabled]) {
+  display: none;
+}
 `;
 
 export const styles: Record<string, CSSProperties> = {
@@ -360,6 +381,14 @@ export const styles: Record<string, CSSProperties> = {
     boxSizing: 'border-box',
   },
   // ── Messages ──
+  // ThreadPrimitive.Root 外壳：透明布局容器，让 Viewport 撑满主列
+  threadRoot: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+  },
   messagesArea: {
     flex: 1,
     minHeight: 0,
@@ -368,6 +397,29 @@ export const styles: Record<string, CSSProperties> = {
     flexDirection: 'column',
     position: 'relative',
     paddingTop: 0,
+  },
+  // 跳到底部胶囊（贴底时经 .pg-jump-bottom[disabled] CSS 隐藏）
+  jumpToBottomWrap: {
+    position: 'sticky',
+    bottom: 10,
+    display: 'flex',
+    justifyContent: 'center',
+    pointerEvents: 'none',
+    zIndex: 5,
+  },
+  jumpToBottomBtn: {
+    pointerEvents: 'auto',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 14px',
+    fontSize: 12,
+    borderRadius: 999,
+    border: '1px solid rgba(128,128,128,0.35)',
+    background: 'var(--ag-surface, rgba(30,30,30,0.92))',
+    color: 'inherit',
+    cursor: 'pointer',
+    boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
   },
 
   // ── Empty state ──
@@ -470,18 +522,13 @@ export const styles: Record<string, CSSProperties> = {
     cursor: 'pointer',
     transition: cssVar('transition'),
   },
-  messageCopyAfterText: {
+  // 悬浮复制按钮的布局壳（显隐由 .pg-msg-copy CSS 控制，见 keyframes 注入串）
+  messageCopyInline: {
     display: 'inline-flex',
     verticalAlign: 'text-bottom',
     marginLeft: 6,
-    opacity: 0,
-    pointerEvents: 'none',
     transform: 'translateY(1px)',
     transition: cssVar('transition'),
-  },
-  messageCopyAfterTextVisible: {
-    opacity: 1,
-    pointerEvents: 'auto',
   },
   messageCopyAfterTextBtn: {
     width: 22,
