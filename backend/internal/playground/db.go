@@ -2,6 +2,7 @@ package playground
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -19,19 +20,35 @@ type Conversation struct {
 }
 
 type Message struct {
-	ID              int64     `json:"id"`
-	ConversationID  int64     `json:"conversation_id"`
-	Role            string    `json:"role"`
-	Content         string    `json:"content"`
-	Reasoning       string    `json:"reasoning,omitempty"`
-	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
-	Platform        string    `json:"platform,omitempty"`
-	Model           string    `json:"model,omitempty"`
-	GroupID         int64     `json:"group_id,omitempty"`
-	InputTokens     int       `json:"input_tokens,omitempty"`
-	OutputTokens    int       `json:"output_tokens,omitempty"`
-	Cost            float64   `json:"cost,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID              int64   `json:"id"`
+	ConversationID  int64   `json:"conversation_id"`
+	Role            string  `json:"role"`
+	Content         string  `json:"content"`
+	Reasoning       string  `json:"reasoning,omitempty"`
+	ReasoningEffort string  `json:"reasoning_effort,omitempty"`
+	Platform        string  `json:"platform,omitempty"`
+	Model           string  `json:"model,omitempty"`
+	GroupID         int64   `json:"group_id,omitempty"`
+	InputTokens     int     `json:"input_tokens,omitempty"`
+	OutputTokens    int     `json:"output_tokens,omitempty"`
+	Cost            float64 `json:"cost,omitempty"`
+	// ToolCalls 工具循环时间线(JSON 数组,历史会话重建工具卡片用)。
+	ToolCalls json.RawMessage `json:"tool_calls,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+// toolCallAudit 单次工具执行的审计记录。
+type toolCallAudit struct {
+	UserID         int64
+	ConversationID int64
+	RequestID      string
+	Iteration      int
+	ToolName       string
+	Arguments      string
+	Status         string // ok | error | cancelled
+	Error          string
+	DurationMs     int64
+	ResultBytes    int
 }
 
 type Asset struct {
@@ -77,8 +94,26 @@ func migrate(db *sql.DB) error {
 
 		ALTER TABLE playground_messages ADD COLUMN IF NOT EXISTS reasoning TEXT NOT NULL DEFAULT '';
 		ALTER TABLE playground_messages ADD COLUMN IF NOT EXISTS reasoning_effort TEXT NOT NULL DEFAULT '';
+		ALTER TABLE playground_messages ADD COLUMN IF NOT EXISTS tool_calls JSONB NOT NULL DEFAULT '[]';
 
 		CREATE INDEX IF NOT EXISTS idx_playground_msg_conv ON playground_messages(conversation_id, created_at);
+
+		CREATE TABLE IF NOT EXISTS playground_tool_calls (
+			id              BIGSERIAL PRIMARY KEY,
+			user_id         BIGINT NOT NULL,
+			conversation_id BIGINT NOT NULL DEFAULT 0,
+			request_id      TEXT NOT NULL DEFAULT '',
+			iteration       INTEGER NOT NULL DEFAULT 0,
+			tool_name       TEXT NOT NULL,
+			arguments       TEXT NOT NULL DEFAULT '',
+			status          TEXT NOT NULL,
+			error           TEXT NOT NULL DEFAULT '',
+			duration_ms     BIGINT NOT NULL DEFAULT 0,
+			result_bytes    INTEGER NOT NULL DEFAULT 0,
+			created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_playground_tool_calls_conv ON playground_tool_calls(conversation_id, created_at);
 
 		CREATE TABLE IF NOT EXISTS playground_assets (
 			id              TEXT PRIMARY KEY,

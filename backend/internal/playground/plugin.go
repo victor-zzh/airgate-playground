@@ -19,7 +19,10 @@ type Plugin struct {
 	host   sdk.Host
 	svc    *Service
 
-	tuning *chatTuning
+	tuning  *chatTuning
+	toolCfg *toolSettings
+	// searchProvider 测试注入口;nil 时按配置构造 Tavily。
+	searchProvider searchProvider
 
 	metaMu    sync.Mutex
 	metaCache map[string]modelMetaEntry
@@ -61,6 +64,8 @@ func (p *Plugin) Init(ctx sdk.PluginContext) error {
 	cfg := ctx.Config()
 	tuning := resolveChatTuning(cfg)
 	p.tuning = &tuning
+	toolCfg := resolveToolSettings(cfg)
+	p.toolCfg = &toolCfg
 
 	type dsnCandidate struct {
 		name string

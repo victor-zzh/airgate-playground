@@ -50,6 +50,7 @@ func (p *Plugin) RegisterRoutes(r sdk.RouteRegistrar) {
 	r.Handle(http.MethodGet, "/messages/", p.requireUser(p.handleListMessages))
 	r.Handle(http.MethodPut, "/messages/", p.requireUser(p.handleUpdateMessage))
 	r.Handle(http.MethodPost, "/messages", p.requireUser(p.handlePersistMessage))
+	r.Handle(http.MethodPost, "/messages/truncate", p.requireUser(p.handleTruncateMessages))
 	r.Handle(http.MethodPost, "/chat/completions", p.requireUser(p.handleChatCompletions))
 
 	// Metadata
@@ -190,6 +191,25 @@ func (p *Plugin) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msgs)
 }
 
+// handleTruncateMessages 线性截断会话(编辑重发前置步骤):删除
+// after_message_id 之后的所有消息。
+func (p *Plugin) handleTruncateMessages(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ConversationID int64 `json:"conversation_id"`
+		AfterMessageID int64 `json:"after_message_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	deleted, err := p.svc.TruncateMessages(r.Context(), parseUserID(r), req.ConversationID, req.AfterMessageID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+}
+
 func (p *Plugin) handlePersistMessage(w http.ResponseWriter, r *http.Request) {
 	var req PersistMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -314,6 +334,26 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.Unmarshal(body, &fields)
 	stream := fields.Stream == nil || *fields.Stream
+
+	// 工具循环:开关开启且流式请求时接管(claude/openai 双协议)。
+	if stream {
+		if tools := p.enabledChatTools(); len(tools) > 0 {
+			if lp := strings.ToLower(platform); lp == "claude" || lp == "anthropic" || lp == "openai" {
+				var loopReq openAIChatRequest
+				if err := json.Unmarshal(body, &loopReq); err != nil {
+					writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "invalid request body")
+					return
+				}
+				loopReq.Model = strings.TrimSpace(loopReq.Model)
+				if loopReq.Model == "" {
+					writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "model required")
+					return
+				}
+				p.runToolLoop(ctx, w, r, lp, loopReq, body, opts, tools, logger)
+				return
+			}
+		}
+	}
 
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")

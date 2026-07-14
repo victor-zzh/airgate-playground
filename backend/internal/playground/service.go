@@ -3,6 +3,7 @@ package playground
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -164,7 +165,7 @@ func (s *Service) ListMessages(ctx context.Context, userID int, convID int64) ([
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, conversation_id, role, content, reasoning, reasoning_effort, platform, model, group_id, input_tokens, output_tokens, cost, created_at
+		`SELECT id, conversation_id, role, content, reasoning, reasoning_effort, platform, model, group_id, input_tokens, output_tokens, cost, tool_calls, created_at
 		 FROM playground_messages
 		 WHERE conversation_id = $1
 		 ORDER BY created_at`, convID,
@@ -177,8 +178,12 @@ func (s *Service) ListMessages(ctx context.Context, userID int, convID int64) ([
 	var msgs []Message
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.Reasoning, &m.ReasoningEffort, &m.Platform, &m.Model, &m.GroupID, &m.InputTokens, &m.OutputTokens, &m.Cost, &m.CreatedAt); err != nil {
+		var toolCalls []byte
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.Reasoning, &m.ReasoningEffort, &m.Platform, &m.Model, &m.GroupID, &m.InputTokens, &m.OutputTokens, &m.Cost, &toolCalls, &m.CreatedAt); err != nil {
 			return nil, err
+		}
+		if len(toolCalls) > 0 && string(toolCalls) != "[]" {
+			m.ToolCalls = json.RawMessage(toolCalls)
 		}
 		if resolved, err := s.resolveAssetURLs(ctx, userID, m.Content); err != nil {
 			s.logger.Warn("failed to resolve message assets", "error", err, "message_id", m.ID)
@@ -190,7 +195,11 @@ func (s *Service) ListMessages(ctx context.Context, userID int, convID int64) ([
 	return msgs, rows.Err()
 }
 
-func (s *Service) saveMessage(ctx context.Context, convID int64, role, content, reasoning, reasoningEffort, platform, model string, groupID int64, inputTokens, outputTokens int, cost float64) (*Message, error) {
+func (s *Service) saveMessage(ctx context.Context, convID int64, role, content, reasoning, reasoningEffort, platform, model string, groupID int64, inputTokens, outputTokens int, cost float64, toolCalls json.RawMessage) (*Message, error) {
+	toolCallsValue := "[]"
+	if len(toolCalls) > 0 {
+		toolCallsValue = string(toolCalls)
+	}
 	m := &Message{
 		ConversationID:  convID,
 		Role:            role,
@@ -203,12 +212,13 @@ func (s *Service) saveMessage(ctx context.Context, convID int64, role, content, 
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,
 		Cost:            cost,
+		ToolCalls:       toolCalls,
 	}
 	err := s.db.QueryRowContext(ctx,
-		`INSERT INTO playground_messages (conversation_id, role, content, reasoning, reasoning_effort, platform, model, group_id, input_tokens, output_tokens, cost)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		`INSERT INTO playground_messages (conversation_id, role, content, reasoning, reasoning_effort, platform, model, group_id, input_tokens, output_tokens, cost, tool_calls)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		 RETURNING id, created_at`,
-		convID, role, content, reasoning, reasoningEffort, platform, model, groupID, inputTokens, outputTokens, cost,
+		convID, role, content, reasoning, reasoningEffort, platform, model, groupID, inputTokens, outputTokens, cost, toolCallsValue,
 	).Scan(&m.ID, &m.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -232,7 +242,11 @@ type PersistMessageRequest struct {
 	InputTokens     int     `json:"input_tokens"`
 	OutputTokens    int     `json:"output_tokens"`
 	Cost            float64 `json:"cost"`
+	// ToolCalls 工具循环时间线(前端把 SSE 收到的事件原样回传,≤64KB JSON 数组)。
+	ToolCalls json.RawMessage `json:"tool_calls,omitempty"`
 }
+
+const maxToolCallsPersistBytes = 64 << 10
 
 type UpdateMessageRequest struct {
 	Content      string  `json:"content"`
@@ -325,7 +339,16 @@ func (s *Service) PersistMessage(ctx context.Context, userID int, req PersistMes
 		return nil, fmt.Errorf("store message assets: %w", err)
 	}
 
-	msg, err := s.saveMessage(ctx, conv.ID, req.Role, content, req.Reasoning, req.ReasoningEffort, platform, model, groupID, req.InputTokens, req.OutputTokens, req.Cost)
+	toolCalls := req.ToolCalls
+	if len(toolCalls) > 0 {
+		var arr []json.RawMessage
+		if len(toolCalls) > maxToolCallsPersistBytes || json.Unmarshal(toolCalls, &arr) != nil {
+			s.logger.Warn("persist_tool_calls_rejected", "bytes", len(toolCalls))
+			toolCalls = nil
+		}
+	}
+
+	msg, err := s.saveMessage(ctx, conv.ID, req.Role, content, req.Reasoning, req.ReasoningEffort, platform, model, groupID, req.InputTokens, req.OutputTokens, req.Cost, toolCalls)
 	if err != nil {
 		return nil, fmt.Errorf("save message: %w", err)
 	}
@@ -347,6 +370,48 @@ func (s *Service) PersistMessage(ctx context.Context, userID int, req PersistMes
 	}
 
 	return msg, nil
+}
+
+// InsertToolCallAudit 工具执行审计入库(调用方负责失败降级)。
+func (s *Service) InsertToolCallAudit(ctx context.Context, rec toolCallAudit) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO playground_tool_calls (user_id, conversation_id, request_id, iteration, tool_name, arguments, status, error, duration_ms, result_bytes)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		rec.UserID, rec.ConversationID, rec.RequestID, rec.Iteration, rec.ToolName, rec.Arguments, rec.Status, rec.Error, rec.DurationMs, rec.ResultBytes,
+	)
+	return err
+}
+
+// TruncateMessages 线性截断:删除会话内 afterMessageID 之后的所有消息
+// (含边界外校验),供前端「编辑重发」使用。返回删除条数。
+func (s *Service) TruncateMessages(ctx context.Context, userID int, convID, afterMessageID int64) (int64, error) {
+	if convID <= 0 || afterMessageID <= 0 {
+		return 0, fmt.Errorf("conversation_id and after_message_id required")
+	}
+	conv, err := s.GetConversation(ctx, userID, convID)
+	if err != nil || conv == nil {
+		return 0, fmt.Errorf("conversation not found")
+	}
+	var anchor int64
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT id FROM playground_messages WHERE id = $1 AND conversation_id = $2", afterMessageID, convID,
+	).Scan(&anchor); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("message not found")
+		}
+		return 0, err
+	}
+	res, err := s.db.ExecContext(ctx,
+		"DELETE FROM playground_messages WHERE conversation_id = $1 AND id > $2", convID, afterMessageID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	deleted, _ := res.RowsAffected()
+	if _, err := s.db.ExecContext(ctx, "UPDATE playground_conversations SET updated_at = NOW() WHERE id = $1", convID); err != nil {
+		s.logger.Error("failed to refresh conversation timestamp", "error", err, "conv_id", convID)
+	}
+	return deleted, nil
 }
 
 func (s *Service) storeContentAssets(ctx context.Context, userID int, convID int64, content string) (string, error) {

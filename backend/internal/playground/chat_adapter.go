@@ -59,6 +59,8 @@ type openAIChatRequest struct {
 	Messages        []chatMessage `json:"messages"`
 	Stream          *bool         `json:"stream,omitempty"`
 	ReasoningEffort string        `json:"reasoning_effort,omitempty"`
+	// ConversationID 前端会话 id(工具产物归属用),转发前剥除,不到上游。
+	ConversationID int64 `json:"conversation_id,omitempty"`
 }
 
 type chatMessage struct {
@@ -74,13 +76,15 @@ type claudeMessage struct {
 type claudeBlock map[string]any
 
 type claudeMessagesRequest struct {
-	Model        string          `json:"model"`
-	MaxTokens    int             `json:"max_tokens"`
-	System       []claudeBlock   `json:"system,omitempty"`
-	Messages     []claudeMessage `json:"messages"`
-	Stream       bool            `json:"stream"`
-	Thinking     *claudeThinking `json:"thinking,omitempty"`
-	OutputConfig map[string]any  `json:"output_config,omitempty"`
+	Model        string           `json:"model"`
+	MaxTokens    int              `json:"max_tokens"`
+	System       []claudeBlock    `json:"system,omitempty"`
+	Messages     []claudeMessage  `json:"messages"`
+	Stream       bool             `json:"stream"`
+	Thinking     *claudeThinking  `json:"thinking,omitempty"`
+	OutputConfig map[string]any   `json:"output_config,omitempty"`
+	Tools        []map[string]any `json:"tools,omitempty"`
+	ToolChoice   map[string]any   `json:"tool_choice,omitempty"`
 }
 
 type claudeThinking struct {
@@ -148,22 +152,36 @@ func compileChatForwardPlanWithOpts(platform string, body []byte, opts compileOp
 	}
 }
 
-// compileOpenAIChatBody 在原 body 上做最小改写:注入默认 system 消息(前置,
-// 用户自带 system 保留在后),xhigh 档钳制到 high(OpenAI 枚举只到 high)。
-// 其余字段原样保留。
-func compileOpenAIChatBody(req openAIChatRequest, body []byte, opts compileOpts) ([]byte, error) {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(body, &m); err != nil {
+// openAIForwardFieldWhitelist 白名单重编译:只透传已知安全字段,封掉客户端
+// 任意字段直达上游的通道(tools/functions/logit_bias/conversation_id 等一律剥除,
+// 服务端工具由 loop 自行注入)。
+var openAIForwardFieldWhitelist = []string{
+	"model", "messages", "stream", "stream_options", "reasoning_effort",
+	"temperature", "top_p", "max_tokens", "max_completion_tokens",
+}
+
+// buildOpenAIChatBodyMap 白名单重编译 + 注入默认 system 消息(前置,用户自带
+// system 保留在后),xhigh 档钳制到 high(OpenAI 枚举只到 high)。
+// 返回 map 供工具循环继续追加 tools/tool_choice/回合。
+func buildOpenAIChatBodyMap(req openAIChatRequest, body []byte, opts compileOpts) (map[string]json.RawMessage, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("invalid request body")
 	}
+	m := make(map[string]json.RawMessage, len(openAIForwardFieldWhitelist))
+	for _, key := range openAIForwardFieldWhitelist {
+		if v, ok := raw[key]; ok {
+			m[key] = v
+		}
+	}
 	if strings.EqualFold(strings.TrimSpace(req.ReasoningEffort), "xhigh") {
-		if raw, err := json.Marshal("high"); err == nil {
-			m["reasoning_effort"] = raw
+		if encoded, err := json.Marshal("high"); err == nil {
+			m["reasoning_effort"] = encoded
 		}
 	}
 	var msgs []json.RawMessage
-	if raw, ok := m["messages"]; ok {
-		if err := json.Unmarshal(raw, &msgs); err != nil {
+	if rawMsgs, ok := m["messages"]; ok {
+		if err := json.Unmarshal(rawMsgs, &msgs); err != nil {
 			return nil, fmt.Errorf("invalid request body")
 		}
 	}
@@ -179,12 +197,21 @@ func compileOpenAIChatBody(req openAIChatRequest, body []byte, opts compileOpts)
 		return nil, err
 	}
 	m["messages"] = merged
+	return m, nil
+}
+
+func compileOpenAIChatBody(req openAIChatRequest, body []byte, opts compileOpts) ([]byte, error) {
+	m, err := buildOpenAIChatBodyMap(req, body, opts)
+	if err != nil {
+		return nil, err
+	}
 	return json.Marshal(m)
 }
 
-func compileClaudeMessagesBody(req openAIChatRequest, opts compileOpts) ([]byte, error) {
+// buildClaudeMessagesRequest 编译出结构化请求(工具循环逐轮追加回合复用)。
+func buildClaudeMessagesRequest(req openAIChatRequest, opts compileOpts) (*claudeMessagesRequest, error) {
 	gen := planClaudeGeneration(req.Model, req.ReasoningEffort, opts)
-	out := claudeMessagesRequest{
+	out := &claudeMessagesRequest{
 		Model:     req.Model,
 		MaxTokens: gen.MaxTokens,
 		Stream:    req.Stream == nil || *req.Stream,
@@ -221,12 +248,62 @@ func compileClaudeMessagesBody(req openAIChatRequest, opts compileOpts) ([]byte,
 	cacheOn := opts.Tuning.PromptCache && !opts.DisableCache
 	out.System = buildClaudeSystemBlocks(opts.Tuning.SystemPrompt, userSystem, opts.Now, cacheOn)
 	if cacheOn {
-		// 增量断点:打在最后一条消息的最后一个块上,多轮会话逐轮命中前缀。
-		last := out.Messages[len(out.Messages)-1]
-		last.Content[len(last.Content)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
+		setClaudeMessageCacheBreakpoint(out)
 	}
+	return out, nil
+}
 
+// setClaudeMessageCacheBreakpoint 增量断点:先清掉消息侧旧断点,再打在最后
+// 一条消息的最后一个块上。多轮会话/工具循环逐轮命中前缀,且总断点数
+// 恒为 2(system 稳定块 + 消息末块),不会撞 Anthropic 4 断点上限。
+func setClaudeMessageCacheBreakpoint(req *claudeMessagesRequest) {
+	for _, msg := range req.Messages {
+		for _, block := range msg.Content {
+			delete(block, "cache_control")
+		}
+	}
+	if len(req.Messages) == 0 {
+		return
+	}
+	last := req.Messages[len(req.Messages)-1]
+	last.Content[len(last.Content)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
+}
+
+func compileClaudeMessagesBody(req openAIChatRequest, opts compileOpts) ([]byte, error) {
+	out, err := buildClaudeMessagesRequest(req, opts)
+	if err != nil {
+		return nil, err
+	}
 	return json.Marshal(out)
+}
+
+// ── 工具声明编译(双协议) ─────────────────────────────────────────────────────
+
+func claudeToolDeclarations(tools []chatTool) []map[string]any {
+	out := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, map[string]any{
+			"name":         tool.Name(),
+			"description":  tool.Description(),
+			"input_schema": tool.InputSchema(),
+		})
+	}
+	return out
+}
+
+func openAIToolDeclarations(tools []chatTool) []map[string]any {
+	out := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        tool.Name(),
+				"description": tool.Description(),
+				"parameters":  tool.InputSchema(),
+			},
+		})
+	}
+	return out
 }
 
 func openAIContentToClaudeBlocks(raw json.RawMessage) []claudeBlock {
@@ -466,6 +543,8 @@ type claudeSSEBridge struct {
 	w     io.Writer
 	model string
 	buf   string
+	// onEvent 每个解析成功的上游事件回调(工具循环的累积器挂在这里)。
+	onEvent func(map[string]any)
 }
 
 func (b *claudeSSEBridge) Write(data []byte) (int, error) {
@@ -507,6 +586,9 @@ func (b *claudeSSEBridge) handleEvent(event string) error {
 		var data map[string]any
 		if err := json.Unmarshal([]byte(payload), &data); err != nil {
 			continue
+		}
+		if b.onEvent != nil {
+			b.onEvent(data)
 		}
 		if data["error"] != nil {
 			return sseWriter{w: b.w}.writeJSON(data)
