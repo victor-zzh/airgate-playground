@@ -4,6 +4,7 @@ import {
   AUI_STREAMING_MESSAGE_ID,
   convertAuiMessage,
   isStreamingDraft,
+  persistedToolCallsFromStream,
   streamingDraftToThreadMessageLike,
   toThreadMessageLike,
   type StreamingDraftMessage,
@@ -100,6 +101,57 @@ describe('streamingDraftToThreadMessageLike', () => {
   it('yields empty content before the first delta arrives', () => {
     const like = streamingDraftToThreadMessageLike({ auiStreamingDraft: true, parts: [] });
     expect(like.content).toEqual([]);
+  });
+});
+
+describe('tool-call mapping', () => {
+  it('history order: reasoning → all tool cards → text', () => {
+    const like = toThreadMessageLike(makeMessage({
+      reasoning: 'plan',
+      content: '答案',
+      tool_calls: [
+        { id: 't1', name: 'web_search', status: 'complete', args: { query: 'x' }, result: { sources: [] } },
+        { id: 't2', name: 'generate_document', status: 'complete', result: { file: { name: 'r.pdf' } } },
+      ],
+    }));
+    const types = (like.content as unknown as Array<{ type: string }>).map(p => p.type);
+    expect(types).toEqual(['reasoning', 'tool-call', 'tool-call', 'text']);
+    const firstTool = (like.content as unknown as Array<Record<string, unknown>>)[1];
+    expect(firstTool).toMatchObject({ type: 'tool-call', toolCallId: 't1', toolName: 'web_search', isError: false });
+  });
+
+  it('maps error tool call with isError and error result', () => {
+    const like = toThreadMessageLike(makeMessage({
+      content: '',
+      tool_calls: [{ id: 't1', name: 'web_search', status: 'error', error: '上限' }],
+    }));
+    const tool = (like.content as unknown as Array<Record<string, unknown>>)[0];
+    expect(tool).toMatchObject({ type: 'tool-call', isError: true, result: { error: '上限' } });
+  });
+
+  it('streaming draft preserves text/tool interleave order', () => {
+    const like = streamingDraftToThreadMessageLike({
+      auiStreamingDraft: true,
+      parts: [
+        { kind: 'text', text: '先搜索' },
+        { kind: 'tool', id: 't1', name: 'web_search', status: 'complete', result: { sources: [] } },
+        { kind: 'text', text: '结论' },
+      ],
+    });
+    const types = (like.content as unknown as Array<{ type: string }>).map(p => p.type);
+    expect(types).toEqual(['text', 'tool-call', 'text']);
+  });
+
+  it('persistedToolCallsFromStream extracts finished tool records', () => {
+    const persisted = persistedToolCallsFromStream([
+      { kind: 'text', text: 'x' },
+      { kind: 'tool', id: 't1', name: 'web_search', status: 'complete', result: { sources: [] } },
+      { kind: 'tool', id: 't2', name: 'generate_document', status: 'error', error: 'boom' },
+    ]);
+    expect(persisted).toEqual([
+      { id: 't1', name: 'web_search', status: 'complete', args: undefined, result: { sources: [] }, error: undefined },
+      { id: 't2', name: 'generate_document', status: 'error', args: undefined, result: undefined, error: 'boom' },
+    ]);
   });
 });
 

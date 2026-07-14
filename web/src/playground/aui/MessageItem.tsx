@@ -6,8 +6,21 @@ import { usePlayground } from '../PlaygroundContext';
 import { styles } from '../styles';
 import { TextPart } from './parts/TextPart';
 import { ReasoningPart } from './parts/ReasoningPart';
+import { WebSearchTool } from './parts/tools/WebSearchTool';
+import { DocumentTool } from './parts/tools/DocumentTool';
+import { ToolFallback } from './parts/tools/ToolFallback';
 
-const PART_COMPONENTS = { Text: TextPart, Reasoning: ReasoningPart };
+const PART_COMPONENTS = {
+  Text: TextPart,
+  Reasoning: ReasoningPart,
+  tools: {
+    by_name: {
+      web_search: WebSearchTool,
+      generate_document: DocumentTool,
+    },
+    Fallback: ToolFallback,
+  },
+};
 
 export function MessageItem() {
   const { t, isMobile, thinkingVisible } = usePlayground();
@@ -15,6 +28,7 @@ export function MessageItem() {
   const custom = useMessage(s => s.metadata.custom as Record<string, unknown> | undefined);
   const hasText = useMessage(s => s.content.some(part => part.type === 'text' && Boolean(part.text)));
   const hasReasoning = useMessage(s => s.content.some(part => part.type === 'reasoning' && Boolean(part.text)));
+  const hasTools = useMessage(s => s.content.some(part => part.type === 'tool-call'));
 
   const isStreamingDraft = Boolean(custom?.streaming);
   const model = typeof custom?.model === 'string' ? custom.model : '';
@@ -30,8 +44,8 @@ export function MessageItem() {
       <div style={isUser ? { ...styles.userBubble, ...(isMobile ? styles.userBubbleMobile : null) } : styles.assistantBlock}>
         <MessagePrimitive.Parts components={PART_COMPONENTS} />
 
-        {/* 流式尚无正文时的"思考中"占位（有可见思维链时不显示） */}
-        {!isUser && isStreamingDraft && !hasText && (!hasReasoning || !thinkingVisible) && (
+        {/* 流式尚无正文时的"思考中"占位（有可见思维链或工具卡时不显示） */}
+        {!isUser && isStreamingDraft && !hasText && !hasTools && (!hasReasoning || !thinkingVisible) && (
           <div style={{ ...styles.messageContent, opacity: 0.5 }}>
             <span style={styles.thinkingDots}>{t('playground.thinking')}</span>
           </div>

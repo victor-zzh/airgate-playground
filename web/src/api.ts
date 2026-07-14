@@ -68,6 +68,16 @@ export interface Conversation {
   updated_at: string;
 }
 
+// 持久化的工具调用记录（历史会话重建工具卡片用）。
+export interface PersistedToolCall {
+  id: string;
+  name: string;
+  status: 'complete' | 'error';
+  args?: unknown;
+  result?: Record<string, unknown>;
+  error?: string;
+}
+
 export interface Message {
   id: number;
   conversation_id: number;
@@ -81,6 +91,7 @@ export interface Message {
   input_tokens: number;
   output_tokens: number;
   cost: number;
+  tool_calls?: PersistedToolCall[];
   created_at: string;
 }
 
@@ -108,6 +119,7 @@ export interface PersistedMessageRequest {
   input_tokens?: number;
   output_tokens?: number;
   cost?: number;
+  tool_calls?: PersistedToolCall[];
 }
 
 export type ChatMessageContent = string | Array<
@@ -115,9 +127,22 @@ export type ChatMessageContent = string | Array<
   | { type: 'image_url'; image_url: { url: string } }
 >;
 
+// 工具循环 SSE 扩展事件（object=airgate.tool_event）。started 带完整
+// arguments，finished 带 status/result（web_search→sources，generate_document→file）。
+export interface ToolEventCall {
+  id: string;
+  name: string;
+  arguments?: unknown;
+  status?: 'ok' | 'error';
+  duration_ms?: number;
+  result?: Record<string, unknown>;
+  error?: string;
+}
+
 export interface ChatCompletionCallbacks {
   onData: (text: string) => void;
   onReasoning: (text: string) => void;
+  onToolEvent?: (event: 'tool_call_started' | 'tool_call_finished', iteration: number, call: ToolEventCall) => void;
   onDone: (usage: { input_tokens: number; output_tokens: number; model: string; cost: number }) => void | Promise<void>;
   onError: (err: string) => void;
 }
@@ -160,6 +185,8 @@ export async function chatCompletionsStream(
     stream: true;
     reasoning_effort?: ReasoningEffort;
     stream_options?: { include_usage?: boolean };
+    // 工具循环的产物归属（文档生成落资产需要）；后端转发前剥除，不上行。
+    conversation_id?: number;
   },
   callbacks: ChatCompletionCallbacks,
   signal?: AbortSignal,
@@ -224,6 +251,11 @@ export async function chatCompletionsStream(
           if (parsed.error) {
             callbacks.onError(parsed.error.message || parsed.error);
             return;
+          }
+          // 工具循环事件：与 OpenAI chunk 用 object 字段区分，参数不做流式增量。
+          if (parsed.object === 'airgate.tool_event') {
+            callbacks.onToolEvent?.(parsed.event, parsed.iteration ?? 0, parsed.call ?? {});
+            continue;
           }
           const choiceDelta = parsed.choices?.[0]?.delta;
           const reasoningDelta = choiceDelta?.reasoning_content;

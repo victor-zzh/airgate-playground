@@ -54,7 +54,9 @@ import { processAttachments } from './attachments/processor';
 import { formatAttachmentErrors, formatAttachmentIssue } from './attachments/issues';
 import { styles } from './styles';
 import { CHAT_MODEL_REGISTRY } from './modelConfig';
-import { appendStreamPart, type StreamPart } from './aui/streamState';
+import { appendStreamPart, upsertToolPart, type StreamPart, type ToolCallStatus } from './aui/streamState';
+import { persistedToolCallsFromStream } from './aui/convert';
+import type { PersistedToolCall } from '../api';
 
 declare global {
   interface Window {
@@ -474,6 +476,8 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
 
     let accumulated = '';
     let accumulatedReasoning = '';
+    // 工具循环产物的持久化累加器（onDone 时随消息落库，供历史重建工具卡）。
+    let finalStreamParts: readonly StreamPart[] = [];
     const baseRequest = {
       model,
       messages: requestMessages.map(msg => ({
@@ -482,6 +486,8 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
       })),
       stream: true as const,
       ...(requestSupportsReasoning ? { reasoning_effort: requestReasoningEffort ?? reasoningEffort } : {}),
+      // 工具产物归属（文档生成落资产用）；草稿会话已换轨为真实 id。
+      ...(conversationID > 0 ? { conversation_id: conversationID } : {}),
     };
 
     const fail = (message: string) => {
@@ -506,8 +512,28 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
             accumulatedReasoning += text;
             setStreamParts(prev => appendStreamPart(prev, 'reasoning', text));
           },
+          onToolEvent: (event, _iteration, call) => {
+            const status: ToolCallStatus | undefined = event === 'tool_call_finished'
+              ? (call.status === 'error' ? 'error' : 'complete')
+              : 'running';
+            setStreamParts(prev => {
+              const next = upsertToolPart(prev, {
+                id: call.id,
+                name: call.name,
+                status,
+                args: call.arguments,
+                result: call.result,
+                error: call.error,
+              });
+              finalStreamParts = next;
+              return next;
+            });
+          },
           onDone: async (usage) => {
-            if (!accumulated) {
+            // 工具循环可能出现「只出文档卡片、正文极简」的情况，正文空但有工具
+            // 产物时不判失败。
+            const toolCalls: PersistedToolCall[] = persistedToolCallsFromStream(finalStreamParts);
+            if (!accumulated && toolCalls.length === 0) {
               fail(t('playground.no_response'));
               return;
             }
@@ -522,9 +548,10 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
               input_tokens: usage.input_tokens,
               output_tokens: usage.output_tokens,
               cost: usage.cost,
+              ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
             });
             if (activeIdRef.current === conversationID) {
-              setMessages(prev => [...prev, { ...persisted, content: accumulated }]);
+              setMessages(prev => [...prev, { ...persisted, content: accumulated, tool_calls: toolCalls.length > 0 ? toolCalls : undefined }]);
             }
             if (titleContent) {
               setConversations(prev => prev.map(item =>
