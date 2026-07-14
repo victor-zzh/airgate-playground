@@ -78,8 +78,8 @@ func testPNGBytes(t *testing.T) []byte {
 // 经 pluginHostHandle 的 json.Marshal 后到达插件侧时 data 必然是 base64 字符串。
 // 直接手填 map（跳过 JSON 往返）会掩盖双重 base64 编码 bug——历史上正因如此漏测。
 type assetBytesHost struct {
-	data        []byte
-	contentType string
+	data         []byte
+	contentType  string
 	gotObjectKey string
 }
 
