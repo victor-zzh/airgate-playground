@@ -75,9 +75,3 @@ export function streamPartsText(parts: readonly StreamPart[], kind: StreamPartKi
     .map(part => part.text)
     .join('');
 }
-
-// toolPartsFromStream：抽出已完成/进行中的工具调用记录，供持久化到消息
-// tool_calls 字段（历史会话重建工具卡片用）。
-export function toolPartsFromStream(parts: readonly StreamPart[]): StreamToolPart[] {
-  return parts.filter(isToolPart);
-}

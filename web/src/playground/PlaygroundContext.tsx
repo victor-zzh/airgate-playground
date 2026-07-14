@@ -39,6 +39,7 @@ import {
   defaultModelOptionValue,
   getStoredActiveConversationId,
   getStoredSelectedModel,
+  isTailRecoverable,
   messageContentWithAttachments,
   modelOptionValue,
   readLocalStorageValue,
@@ -183,6 +184,9 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [error, setError] = useState('');
   const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
+  // 发送闸门：从 submitUserMessage 开始到本轮流式收尾期间同步置真。
+  // 用它挡掉「落库→起流」异步空档里 hasRecoverableUserMessage 的误闪。
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [interactionNotice, setInteractionNotice] = useState('');
   const [previewImage, setPreviewImage] = useState<ImagePreviewState | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -281,12 +285,16 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     [activeId, conversations],
   );
   const isActiveConversationStreaming = isStreaming && streamConversationId === activeId;
-  const hasRecoverableUserMessage = Boolean(
-    activeId &&
-    !isStreaming &&
-    messages.length > 0 &&
-    messages[messages.length - 1]?.role === 'user',
-  );
+  // 跨会话恢复：重开/刷新后末位仍是用户提问(助手没答上来)时,给一个安静的一键重试。
+  // 严格门控——发送中(isSubmitting/isStreaming)不显以免误闪;实时失败时由错误条接管
+  // (!error),二者互斥,任意时刻最多一条。
+  const hasRecoverableUserMessage = isTailRecoverable({
+    activeId,
+    isStreaming,
+    isSubmitting,
+    hasError: Boolean(error),
+    lastRole: messages[messages.length - 1]?.role,
+  });
   const canSubmit = Boolean(
     selectedPlatform &&
     selectedModelID &&
@@ -622,6 +630,9 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     setMessages(requestMessages);
 
     try {
+      // 同步开闸：与上面的 setMessages 同一批 render 生效,恢复条在整个发送期间不显;
+      // 放在 try 内保证任何失败路径都会经 finally 关闸,不会把闸门永久卡死。
+      setIsSubmitting(true);
       if (conversationID === DRAFT_CONVERSATION_ID) {
         const conv = await api.createConversation({
           title: '',
@@ -681,6 +692,9 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
         setError(err instanceof Error ? err.message : 'stream failed');
       }
       finishStreaming();
+    } finally {
+      // 关闸：成功→末位已是 assistant;失败→error 已置,两种情况恢复条都不显。
+      setIsSubmitting(false);
     }
   }, [
     activeId,
@@ -708,6 +722,8 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     void streamAssistantResponse(retryRequest);
   }, [isStreaming, retryRequest, streamAssistantResponse]);
 
+  // 跨会话恢复用：retryRequest 是会话内状态,重开/刷新后已丢,故从持久化的 messages
+  // 重建请求(取到最后一条 user 为止),不依赖 retryRequest。
   const regenerateUnfinishedResponse = useCallback(() => {
     if (!activeId || isStreaming) return;
     const lastUserIndex = [...messages].map(msg => msg.role).lastIndexOf('user');

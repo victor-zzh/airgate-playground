@@ -242,6 +242,7 @@ export function Composer() {
           <div style={{ ...styles.inputButtonGroup, ...(isMobile ? styles.inputButtonGroupMobile : null) }}>
             <button
               type="button"
+              className={thinkingVisible ? 'pg-ghost-btn is-active' : 'pg-ghost-btn'}
               style={{
                 ...styles.thinkingToggleBtn,
                 ...(thinkingVisible ? styles.thinkingToggleBtnActive : null),
@@ -278,13 +279,14 @@ export function Composer() {
 
             <button
               type="button"
+              className="pg-ghost-btn"
               style={{ ...styles.attachBtn, ...(isMobile ? styles.actionBtnMobile : null) }}
               onMouseDown={event => event.preventDefault()}
               onClick={triggerImagePicker}
               disabled={isActiveConversationStreaming}
               title={t('playground.attach_files')}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
               {t('playground.file')}
@@ -293,11 +295,12 @@ export function Composer() {
             {isActiveConversationStreaming ? (
               <button
                 type="button"
+                className="pg-stop-btn"
                 style={{ ...styles.stopBtn, ...(isMobile ? styles.actionBtnMobile : null) }}
                 onMouseDown={event => event.preventDefault()}
                 onClick={stopStreaming}
               >
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
                   <rect x="2" y="2" width="8" height="8" rx="1" />
                 </svg>
                 {t('playground.stop')}
@@ -305,6 +308,7 @@ export function Composer() {
             ) : (
               <button
                 type="button"
+                className="pg-send-btn"
                 style={{
                   ...styles.sendBtn,
                   ...(isMobile ? styles.actionBtnMobile : null),
@@ -315,7 +319,7 @@ export function Composer() {
                 disabled={!canSendMessage}
                 title={selectedPlatform && selectedModelID ? undefined : t('playground.select_model_first')}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M22 2L11 13" />
                   <path d="M22 2l-7 20-4-9-9-4 20-7z" />
                 </svg>

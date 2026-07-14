@@ -19,24 +19,31 @@ export function ChatView() {
     isDraggingFiles,
   } = usePlayground();
 
-  // 错误条/恢复条/复制提示：保持原来在滚动容器内、消息之后的文档流位置
+  // 错误条/恢复条/复制提示：保持原来在滚动容器内、消息之后的文档流位置。
+  // 恢复条只在「重开/刷新后末位仍是用户提问」的真实场景显示(hasRecoverableUserMessage
+  // 已严格门控:非发送中、非流式、无错误),不再有发送瞬间的误闪、也不与错误条并存。
   const notices = (
     <>
       {hasRecoverableUserMessage && (
-        <div style={{ ...styles.errorBar, ...styles.recoverableBar, ...(isMobile ? styles.errorBarMobile : null) }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <path d="M12 8v4m0 4h.01" />
-          </svg>
+        <div style={{ ...styles.errorBar, ...(isMobile ? styles.errorBarMobile : null) }} role="status">
+          <span style={styles.recoveryIcon} aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12a9 9 0 0 1-15.6 6" />
+              <path d="M3 12a9 9 0 0 1 15.6-6" />
+              <path d="M19 2v4h-4" />
+              <path d="M5 22v-4h4" />
+            </svg>
+          </span>
           <span style={styles.errorMessage}>{t('playground.response_unfinished')}</span>
           <button
             type="button"
-            style={styles.recoverableRetryBtn}
+            className="pg-error-retry"
+            style={styles.errorRetryBtn}
             onClick={regenerateUnfinishedResponse}
             title={t('playground.regenerate')}
             aria-label={t('playground.regenerate')}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M21 12a9 9 0 0 1-15.6 6" />
               <path d="M3 12a9 9 0 0 1 15.6-6" />
               <path d="M19 2v4h-4" />
@@ -48,21 +55,24 @@ export function ChatView() {
       )}
 
       {error && (
-        <div style={{ ...styles.errorBar, ...(isMobile ? styles.errorBarMobile : null) }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <path d="M12 8v4m0 4h.01" />
-          </svg>
+        <div style={{ ...styles.errorBar, ...(isMobile ? styles.errorBarMobile : null) }} role="alert">
+          <span style={styles.errorIcon} aria-hidden="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 8v4m0 4h.01" />
+            </svg>
+          </span>
           <span style={styles.errorMessage}>{error}</span>
           {retryRequest && retryRequest.conversationID === activeId && !isStreaming && (
             <button
               type="button"
+              className="pg-error-retry"
               style={styles.errorRetryBtn}
               onClick={regenerateLastResponse}
               title={t('playground.regenerate')}
               aria-label={t('playground.regenerate')}
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M21 12a9 9 0 0 1-15.6 6" />
                 <path d="M3 12a9 9 0 0 1 15.6-6" />
                 <path d="M19 2v4h-4" />
@@ -101,6 +111,8 @@ export function ChatView() {
 
       {isDraggingFiles && (
         <div
+          role="status"
+          aria-live="polite"
           style={{
             position: 'fixed',
             inset: 0,

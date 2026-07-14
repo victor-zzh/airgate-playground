@@ -318,6 +318,25 @@ export async function copyMessageContent(content: string) {
   }
 }
 
+// 跨会话恢复条的显隐判定（纯函数，便于单测）：重开/刷新后末位仍是用户提问、且当前
+// 空闲(非流式、非发送中、无错误)时才显示。发送中由 isSubmitting 挡掉「落库→起流」空档
+// 的误闪；实时失败由 hasError 让位给错误条——二者互斥，任意时刻最多一条。
+export function isTailRecoverable(params: {
+  activeId: number | null;
+  isStreaming: boolean;
+  isSubmitting: boolean;
+  hasError: boolean;
+  lastRole: string | undefined;
+}): boolean {
+  return Boolean(
+    params.activeId &&
+    !params.isStreaming &&
+    !params.isSubmitting &&
+    !params.hasError &&
+    params.lastRole === 'user',
+  );
+}
+
 export async function copyText(text: string) {
   if (navigator.clipboard?.writeText && window.isSecureContext) {
     await navigator.clipboard.writeText(text);

@@ -1,6 +1,6 @@
 // 消息列表骨架：ThreadPrimitive.Root + Viewport（autoScroll，保持"钉在底部才
 // 跟随"的阅读手感）+ Messages + 跳到底部胶囊（贴底时 primitives 自动 disabled，
-// CSS 隐藏）。errorBar/recoverableBar/interactionNotice 由 ChatView 经 children
+// CSS 隐藏）。errorBar/interactionNotice 由 ChatView 经 children
 // 传入，保持原来在滚动容器内、消息之后的文档流位置。
 import type { ReactNode } from 'react';
 import { ThreadPrimitive } from '@assistant-ui/react';

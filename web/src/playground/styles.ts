@@ -69,11 +69,15 @@ export const keyframes = `
   color: var(--ag-text, #111827) !important;
 }
 .pg-input-wrapper:focus-within {
-  border-color: color-mix(in oklab, var(--ag-primary, #2dd4bf) 35%, transparent) !important;
+  border-color: color-mix(in oklab, var(--ag-primary, #111827) 35%, transparent) !important;
   box-shadow:
     0 8px 40px rgba(0, 0, 0, 0.18),
     0 2px 12px rgba(0, 0, 0, 0.08),
-    0 0 0 1px color-mix(in oklab, var(--ag-primary, #2dd4bf) 12%, transparent) !important;
+    0 0 0 1px color-mix(in oklab, var(--ag-primary, #111827) 12%, transparent) !important;
+}
+.pg-input-wrapper textarea::placeholder {
+  color: var(--ag-field-placeholder, #9ca3af);
+  opacity: 1;
 }
 .pg-composer-select {
   color-scheme: light;
@@ -90,8 +94,8 @@ export const keyframes = `
   outline: none;
 }
 .pg-composer-select:focus-visible {
-  border-color: color-mix(in oklab, var(--ag-primary, #2dd4bf) 38%, transparent) !important;
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ag-primary, #2dd4bf) 22%, transparent);
+  border-color: color-mix(in oklab, var(--ag-primary, #111827) 38%, transparent) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ag-primary, #111827) 22%, transparent);
 }
 .pg-composer-select option {
   background: var(--ag-bg-surface, #ffffff);
@@ -117,6 +121,69 @@ export const keyframes = `
 }
 .pg-jump-bottom-wrap:has(> button[disabled]) {
   display: none;
+}
+.pg-jump-bottom:hover {
+  background: var(--ag-bg-hover, rgba(148, 163, 184, 0.12)) !important;
+  border-color: var(--ag-border, rgba(148, 163, 184, 0.26)) !important;
+}
+.pg-jump-bottom:focus-visible {
+  outline: 2px solid var(--ag-border-focus, #3b82f6);
+  outline-offset: 1px;
+}
+
+/* 失败卡片的「重新生成」：ghost 按钮，hover 才轻抬（与主题单色体系一致） */
+.pg-error-retry:hover {
+  background: var(--ag-bg-active, rgba(148, 163, 184, 0.16)) !important;
+  border-color: var(--ag-border, rgba(148, 163, 184, 0.26)) !important;
+  color: var(--ag-text, #111827) !important;
+}
+.pg-error-retry:focus-visible {
+  outline: 2px solid var(--ag-border-focus, #3b82f6);
+  outline-offset: 1px;
+}
+
+/* 输入区动作按钮：附件/思考=ghost，发送=primary，停止=danger。
+   inline style 只画静态态，hover/active 的抬压反馈交给这里，补足「质感」。 */
+.pg-ghost-btn:hover:not(:disabled) {
+  background: var(--ag-bg-active, rgba(148, 163, 184, 0.16)) !important;
+  border-color: var(--ag-border, rgba(148, 163, 184, 0.26)) !important;
+  color: var(--ag-text, #111827) !important;
+}
+/* 思考开关处于「激活」态时 hover 保留主色调，别被上面的中性 hover 抹平
+   （同 specificity 靠源码顺序在后取胜） */
+.pg-ghost-btn.is-active:hover {
+  background: color-mix(in oklab, var(--ag-primary, #111827) 16%, transparent) !important;
+  border-color: color-mix(in oklab, var(--ag-primary, #111827) 45%, transparent) !important;
+  color: var(--ag-primary, #111827) !important;
+}
+.pg-ghost-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pg-send-btn:hover:not(:disabled) {
+  background: var(--ag-primary-hover, var(--ag-primary, #111827)) !important;
+}
+.pg-send-btn:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+.pg-stop-btn:hover {
+  background: color-mix(in oklab, var(--ag-danger, #ef4444) 22%, transparent) !important;
+}
+/* 消息尾部复制按钮：hover 才染出边框与文字，点前有明确可点反馈 */
+.pg-copy-btn:hover {
+  background: var(--ag-bg-hover, rgba(148, 163, 184, 0.12)) !important;
+  border-color: var(--ag-border, rgba(148, 163, 184, 0.26)) !important;
+  color: var(--ag-text, #111827) !important;
+}
+.pg-copy-btn:focus-visible {
+  outline: 2px solid var(--ag-border-focus, #3b82f6);
+  outline-offset: 1px;
+}
+.pg-ghost-btn:focus-visible,
+.pg-send-btn:focus-visible,
+.pg-stop-btn:focus-visible {
+  outline: 2px solid var(--ag-border-focus, #3b82f6);
+  outline-offset: 1px;
 }
 `;
 
@@ -414,12 +481,14 @@ export const styles: Record<string, CSSProperties> = {
     gap: 6,
     padding: '6px 14px',
     fontSize: 12,
+    fontWeight: 500,
     borderRadius: 999,
-    border: '1px solid rgba(128,128,128,0.35)',
-    background: 'var(--ag-surface, rgba(30,30,30,0.92))',
-    color: 'inherit',
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    background: cssVar('bgElevated'),
+    color: cssVar('textSecondary'),
     cursor: 'pointer',
-    boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+    boxShadow: '0 6px 20px rgba(0, 0, 0, 0.14)',
+    transition: cssVar('transition'),
   },
 
   // ── Empty state ──
@@ -608,7 +677,7 @@ export const styles: Record<string, CSSProperties> = {
   markdownTaskBoxChecked: {
     background: cssVar('primary'),
     borderColor: cssVar('primary'),
-    color: '#fff',
+    color: cssVar('textInverse'),
   },
   markdownBlockquote: {
     margin: '0 0 12px',
@@ -633,7 +702,7 @@ export const styles: Record<string, CSSProperties> = {
     gap: 8,
     padding: '4px 8px 4px 14px',
     borderBottom: `1px solid ${cssVar('borderSubtle')}`,
-    background: 'rgba(128, 128, 128, 0.07)',
+    background: cssVar('bgHover'),
   },
   markdownCodeLang: {
     fontSize: 11,
@@ -729,7 +798,7 @@ export const styles: Record<string, CSSProperties> = {
     fontWeight: 600,
     whiteSpace: 'nowrap',
     color: cssVar('text'),
-    background: 'rgba(128, 128, 128, 0.08)',
+    background: cssVar('bgHover'),
     borderBottom: `1px solid ${cssVar('border')}`,
   },
   markdownTableCell: {
@@ -948,62 +1017,74 @@ export const styles: Record<string, CSSProperties> = {
   },
 
   // ── Error ──
+  // 失败提示走「安静卡片」：中性抬升面 + 细边 + 柔和阴影,红只作为图标 chip 的信号色,
+  // 不再整条染红。圆角 16(与气泡18/输入卡20 同族,宽卡略收),入场用 pg-fadein 轻推。
   errorBar: {
     display: 'flex',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
     // 与消息栏同列宽（messageRow maxWidth 768 - 两侧 24px 内边距），居中不横贯全屏
-    width: 'calc(100% - 56px)',
+    width: 'calc(100% - 48px)',
     maxWidth: 720,
     boxSizing: 'border-box',
-    margin: '8px auto',
-    padding: '10px 14px',
-    borderRadius: cssVar('radiusSm'),
-    background: cssVar('dangerSubtle'),
-    color: cssVar('danger'),
+    margin: '10px auto',
+    padding: '10px 12px',
+    borderRadius: 16,
+    background: cssVar('bgElevated'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    boxShadow: cssVar('shadowMd'),
+    color: cssVar('textSecondary'),
     fontSize: 13,
-    border: `1px solid ${cssVar('danger')}`,
-    borderColor: 'rgba(251, 113, 133, 0.2)',
+    lineHeight: 1.5,
+    animation: 'pg-fadein 0.24s ease-out',
   },
   errorBarMobile: {
-    width: 'calc(100% - 28px)',
+    width: 'calc(100% - 20px)',
     margin: '8px auto',
+  },
+  errorIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 26,
+    height: 26,
+    flexShrink: 0,
+    borderRadius: '999px',
+    background: `color-mix(in oklab, ${cssVar('danger')} 12%, transparent)`,
+    color: cssVar('danger'),
+  },
+  // 恢复条(跨会话未完成)不是错误,图标 chip 走中性色,与红色错误 chip 区分开
+  recoveryIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 26,
+    height: 26,
+    flexShrink: 0,
+    borderRadius: '999px',
+    background: cssVar('bgHover'),
+    color: cssVar('textSecondary'),
   },
   errorMessage: {
     flex: 1,
     minWidth: 0,
-  },
-  recoverableBar: {
-    background: cssVar('primarySubtle'),
-    color: cssVar('primary'),
-    borderColor: 'rgba(45, 212, 191, 0.22)',
+    color: cssVar('textSecondary'),
   },
   errorRetryBtn: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 6,
-    padding: '5px 10px',
+    flexShrink: 0,
+    height: 28,
+    padding: '0 12px',
     borderRadius: '999px',
-    border: '1px solid rgba(251, 113, 133, 0.28)',
-    background: 'rgba(251, 113, 133, 0.1)',
-    color: cssVar('danger'),
+    border: `1px solid ${cssVar('borderSubtle')}`,
+    background: cssVar('bgHover'),
+    color: cssVar('textSecondary'),
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     cursor: 'pointer',
-    fontFamily: cssVar('fontSans'),
-  },
-  recoverableRetryBtn: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '5px 10px',
-    borderRadius: '999px',
-    border: '1px solid rgba(45, 212, 191, 0.3)',
-    background: 'rgba(45, 212, 191, 0.12)',
-    color: cssVar('primary'),
-    fontSize: 12,
-    fontWeight: 700,
-    cursor: 'pointer',
+    transition: cssVar('transition'),
     fontFamily: cssVar('fontSans'),
   },
 
@@ -1028,7 +1109,7 @@ export const styles: Record<string, CSSProperties> = {
     paddingBottom: 10,
     paddingLeft: 6,
     boxShadow: '0 8px 32px rgba(0, 0, 0, 0.18), 0 2px 12px rgba(0, 0, 0, 0.08)',
-    transition: 'box-shadow 0.3s, border-color 0.15s',
+    transition: 'box-shadow 0.2s ease, border-color 0.2s ease',
     width: '100%',
     maxWidth: 768,
     margin: '0 auto',
@@ -1058,7 +1139,6 @@ export const styles: Record<string, CSSProperties> = {
     overflow: 'hidden',
     border: `1px solid ${cssVar('borderSubtle')}`,
     background: cssVar('bgHover'),
-    cursor: 'pointer',
   },
   imagePreview: {
     width: '100%',
@@ -1235,6 +1315,7 @@ export const styles: Record<string, CSSProperties> = {
     whiteSpace: 'nowrap',
     boxSizing: 'border-box',
     cursor: 'pointer',
+    transition: cssVar('transition'),
   },
   actionBtnMobile: {
     flex: '0 1 auto',
