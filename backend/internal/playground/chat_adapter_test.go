@@ -10,7 +10,7 @@ import (
 	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 )
 
-func TestCompileChatForwardPlanOpenAIKeepsChatCompletionsBody(t *testing.T) {
+func TestCompileChatForwardPlanOpenAIInjectsSystemAndKeepsFields(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],"stream":true}`)
 
 	plan, err := compileChatForwardPlan("openai", body)
@@ -26,8 +26,27 @@ func TestCompileChatForwardPlanOpenAIKeepsChatCompletionsBody(t *testing.T) {
 	if plan.NormalizeSSE {
 		t.Fatalf("NormalizeSSE = true, want false")
 	}
-	if !bytes.Equal(plan.Body, body) {
-		t.Fatalf("body changed: %s", plan.Body)
+	var got map[string]any
+	if err := json.Unmarshal(plan.Body, &got); err != nil {
+		t.Fatalf("compiled body invalid: %v", err)
+	}
+	if got["model"] != "gpt-5.5" || got["stream"] != true {
+		t.Fatalf("model/stream changed: %s", plan.Body)
+	}
+	messages := got["messages"].([]any)
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2 (system + user)", len(messages))
+	}
+	sys := messages[0].(map[string]any)
+	if sys["role"] != "system" {
+		t.Fatalf("first message role = %v, want system", sys["role"])
+	}
+	sysText := sys["content"].(string)
+	if !strings.Contains(sysText, "HopBase AI Chat") || !strings.Contains(sysText, "Current date:") {
+		t.Fatalf("system text = %q, want builtin prompt + date", sysText)
+	}
+	if user := messages[1].(map[string]any); user["role"] != "user" || user["content"] != "hi" {
+		t.Fatalf("user message changed: %+v", user)
 	}
 }
 
@@ -71,17 +90,32 @@ func TestCompileChatForwardPlanClaudeCompilesMessagesRequest(t *testing.T) {
 	if got["stream"] != true {
 		t.Fatalf("stream = %v, want true", got["stream"])
 	}
-	// reasoning_effort=medium → thinking budget 8192，max_tokens 同步抬高
+	// sonnet-4-5 属 budget 族:effort=medium → thinking budget 8192,
+	// max_tokens = budget + 正文余量
 	thinking, ok := got["thinking"].(map[string]any)
 	if !ok || thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(8192) {
 		t.Fatalf("thinking = %v, want enabled/8192", got["thinking"])
 	}
-	if got["max_tokens"] != float64(8192+defaultClaudeMaxTokens) {
-		t.Fatalf("max_tokens = %v, want budget+default", got["max_tokens"])
+	if got["max_tokens"] != float64(8192+budgetThinkingHeadroom) {
+		t.Fatalf("max_tokens = %v, want budget+headroom", got["max_tokens"])
 	}
+	// system 布局:[0]=内置稳定块(带缓存断点) [1]=用户自带 [末]=日期块
 	system := got["system"].([]any)
-	if system[0].(map[string]any)["text"] != "You are concise." {
-		t.Fatalf("system = %+v", system)
+	if len(system) != 3 {
+		t.Fatalf("system len = %d, want 3: %+v", len(system), system)
+	}
+	stable := system[0].(map[string]any)
+	if !strings.Contains(stable["text"].(string), "HopBase AI Chat") {
+		t.Fatalf("system[0] = %+v, want builtin prompt", stable)
+	}
+	if cc, ok := stable["cache_control"].(map[string]any); !ok || cc["type"] != "ephemeral" {
+		t.Fatalf("system[0].cache_control = %v, want ephemeral", stable["cache_control"])
+	}
+	if system[1].(map[string]any)["text"] != "You are concise." {
+		t.Fatalf("system[1] = %+v", system[1])
+	}
+	if !strings.Contains(system[2].(map[string]any)["text"].(string), "Current date:") {
+		t.Fatalf("system[2] = %+v, want date block", system[2])
 	}
 	messages := got["messages"].([]any)
 	if len(messages) != 3 {
@@ -267,23 +301,44 @@ func TestOpenAIImagePartCorrectsMediaTypeFromBytes(t *testing.T) {
 	}
 }
 
-func TestCompileClaudeThinkingByReasoningEffort(t *testing.T) {
+// TestCompileClaudeThinkingMatrix 模型族 × effort 的 thinking 编译矩阵。
+// 关键回归:4.6+/5 系不得出现 budget_tokens(上游已移除,发了 400)。
+func TestCompileClaudeThinkingMatrix(t *testing.T) {
 	t.Parallel()
 
+	type want struct {
+		thinkingType string  // "" = 不带 thinking 字段
+		budget       float64 // 0 = 不带 budget_tokens
+		effort       string  // "" = 不带 output_config
+		maxTokens    float64
+	}
 	cases := []struct {
-		effort     string
-		wantBudget int // 0 表示不带 thinking
+		name   string
+		model  string
+		effort string
+		want   want
 	}{
-		{"minimal", 0},
-		{"", 0},
-		{"low", 2048},
-		{"medium", 8192},
-		{"high", 16384},
-		{"xhigh", 32768},
+		// budget 族(≤4.5)
+		{"sonnet45_low", "claude-sonnet-4-5-20250929", "low", want{"enabled", 4096, "", 4096 + budgetThinkingHeadroom}},
+		{"sonnet45_xhigh", "claude-sonnet-4-5-20250929", "xhigh", want{"enabled", 32768, "", 32768 + budgetThinkingHeadroom}},
+		{"sonnet45_minimal", "claude-sonnet-4-5-20250929", "minimal", want{"", 0, "", defaultChatMaxTokens}},
+		{"haiku45_none", "claude-haiku-4-5-20251001", "", want{"", 0, "", defaultChatMaxTokens}},
+		// adaptive 4.6+ 族
+		{"opus48_medium", "claude-opus-4-8", "medium", want{"adaptive", 0, "medium", adaptiveThinkingMaxTokens}},
+		{"opus47_xhigh", "claude-opus-4-7", "xhigh", want{"adaptive", 0, "xhigh", adaptiveThinkingMaxTokens}},
+		{"sonnet46_high", "claude-sonnet-4-6", "high", want{"adaptive", 0, "high", adaptiveThinkingMaxTokens}},
+		{"opus48_minimal", "claude-opus-4-8", "minimal", want{"", 0, "", defaultChatMaxTokens}},
+		{"opus48_none", "claude-opus-4-8", "", want{"", 0, "", defaultChatMaxTokens}},
+		// 5 系(sonnet-5):minimal 显式 disabled
+		{"sonnet5_high", "claude-sonnet-5", "high", want{"adaptive", 0, "high", adaptiveThinkingMaxTokens}},
+		{"sonnet5_minimal", "claude-sonnet-5", "minimal", want{"disabled", 0, "", defaultChatMaxTokens}},
+		// fable 系:思考常开,不发 thinking 字段;minimal 退化 effort low
+		{"fable_medium", "claude-fable-5", "medium", want{"", 0, "medium", adaptiveThinkingMaxTokens}},
+		{"fable_minimal", "claude-fable-5", "minimal", want{"", 0, "low", adaptiveThinkingMaxTokens}},
 	}
 	for _, tc := range cases {
-		t.Run("effort_"+tc.effort, func(t *testing.T) {
-			body := []byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}],"stream":true,"reasoning_effort":"` + tc.effort + `"}`)
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"model":"` + tc.model + `","messages":[{"role":"user","content":"hi"}],"stream":true,"reasoning_effort":"` + tc.effort + `"}`)
 			plan, err := compileChatForwardPlan("claude", body)
 			if err != nil {
 				t.Fatalf("compile error: %v", err)
@@ -293,22 +348,132 @@ func TestCompileClaudeThinkingByReasoningEffort(t *testing.T) {
 				t.Fatal(err)
 			}
 			thinking, hasThinking := got["thinking"].(map[string]any)
-			if tc.wantBudget == 0 {
+			if tc.want.thinkingType == "" {
 				if hasThinking {
-					t.Fatalf("effort %q should not enable thinking, got %v", tc.effort, thinking)
+					t.Fatalf("should not carry thinking, got %v", thinking)
 				}
-				if got["max_tokens"] != float64(defaultClaudeMaxTokens) {
-					t.Fatalf("max_tokens = %v, want default", got["max_tokens"])
+			} else {
+				if !hasThinking || thinking["type"] != tc.want.thinkingType {
+					t.Fatalf("thinking = %v, want type %q", got["thinking"], tc.want.thinkingType)
 				}
-				return
+				if tc.want.budget == 0 {
+					if _, ok := thinking["budget_tokens"]; ok {
+						t.Fatalf("budget_tokens must be omitted for %q: %v", tc.model, thinking)
+					}
+				} else if thinking["budget_tokens"] != tc.want.budget {
+					t.Fatalf("budget = %v, want %v", thinking["budget_tokens"], tc.want.budget)
+				}
 			}
-			if !hasThinking || thinking["budget_tokens"] != float64(tc.wantBudget) {
-				t.Fatalf("effort %q thinking = %v, want budget %d", tc.effort, got["thinking"], tc.wantBudget)
+			oc, hasOC := got["output_config"].(map[string]any)
+			if tc.want.effort == "" {
+				if hasOC {
+					t.Fatalf("should not carry output_config, got %v", oc)
+				}
+			} else if !hasOC || oc["effort"] != tc.want.effort {
+				t.Fatalf("output_config = %v, want effort %q", got["output_config"], tc.want.effort)
 			}
-			if got["max_tokens"] != float64(tc.wantBudget+defaultClaudeMaxTokens) {
-				t.Fatalf("max_tokens = %v, want budget+default", got["max_tokens"])
+			if got["max_tokens"] != tc.want.maxTokens {
+				t.Fatalf("max_tokens = %v, want %v", got["max_tokens"], tc.want.maxTokens)
 			}
 		})
+	}
+}
+
+func TestPlanClaudeGenerationMetaAndDegrade(t *testing.T) {
+	t.Parallel()
+
+	// models.list 元数据优先于静态兜底表
+	opts := defaultCompileOpts()
+	opts.LookupMaxOutput = func(model string) (int, bool) { return 20000, true }
+	gen := planClaudeGeneration("claude-opus-4-8", "medium", opts)
+	if gen.MaxTokens != 20000 {
+		t.Fatalf("MaxTokens = %d, want meta 20000", gen.MaxTokens)
+	}
+
+	// DisableThinking 降级:不带 thinking/output_config
+	opts = defaultCompileOpts()
+	opts.DisableThinking = true
+	gen = planClaudeGeneration("claude-sonnet-5", "high", opts)
+	if gen.Thinking != nil || gen.Effort != "" {
+		t.Fatalf("degraded plan should drop thinking, got %+v", gen)
+	}
+	if gen.MaxTokens != defaultChatMaxTokens {
+		t.Fatalf("degraded MaxTokens = %d, want default", gen.MaxTokens)
+	}
+}
+
+func TestClaudeModelFamilyClassification(t *testing.T) {
+	t.Parallel()
+	cases := map[string]claudeFamily{
+		"claude-sonnet-4-5-20250929": familyBudget,
+		"claude-haiku-4-5-20251001":  familyBudget,
+		"claude-sonnet-4-20250514":   familyBudget, // 日期段不作 minor
+		"claude-3-7-sonnet":          familyBudget,
+		"claude-sonnet-4-6":          familyAdaptive46,
+		"claude-opus-4-7":            familyAdaptive46,
+		"claude-opus-4-8":            familyAdaptive46,
+		"claude-sonnet-5":            familyV5,
+		"claude-fable-5":             familyFable,
+		"unknown-model":              familyBudget,
+	}
+	for model, want := range cases {
+		if got := claudeModelFamily(model); got != want {
+			t.Fatalf("claudeModelFamily(%q) = %v, want %v", model, got, want)
+		}
+	}
+}
+
+func TestChatDegradeFlags(t *testing.T) {
+	t.Parallel()
+	dropT, dropC := chatDegradeFlags([]byte(`{"error":{"message":"Unexpected value(s) for the thinking parameter"}}`))
+	if !dropT || dropC {
+		t.Fatalf("thinking error: dropT=%v dropC=%v", dropT, dropC)
+	}
+	dropT, _ = chatDegradeFlags([]byte(`{"error":{"message":"output_config: Extra inputs are not permitted"}}`))
+	if !dropT {
+		t.Fatalf("output_config error should drop thinking")
+	}
+	dropT, dropC = chatDegradeFlags([]byte(`{"error":{"message":"cache_control: Extra inputs are not permitted"}}`))
+	if dropT || !dropC {
+		t.Fatalf("cache error: dropT=%v dropC=%v", dropT, dropC)
+	}
+	dropT, dropC = chatDegradeFlags([]byte(`{"error":{"message":"credit balance too low"}}`))
+	if dropT || dropC {
+		t.Fatalf("unrelated error should not degrade")
+	}
+}
+
+func TestCompileClaudeCacheBreakpoints(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"turn 1"},{"role":"assistant","content":"a1"},{"role":"user","content":"turn 2"}],"stream":true}`)
+	plan, err := compileChatForwardPlan("claude", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Messages []claudeMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(plan.Body, &got); err != nil {
+		t.Fatal(err)
+	}
+	last := got.Messages[len(got.Messages)-1]
+	if cc, ok := last.Content[len(last.Content)-1]["cache_control"].(map[string]any); !ok || cc["type"] != "ephemeral" {
+		t.Fatalf("last block cache_control missing: %+v", last.Content)
+	}
+	// 前面的消息块不打断点
+	if _, ok := got.Messages[0].Content[0]["cache_control"]; ok {
+		t.Fatalf("first message should not carry cache_control")
+	}
+
+	// 关闭缓存:全程无 cache_control
+	opts := defaultCompileOpts()
+	opts.Tuning.PromptCache = false
+	plan, err = compileChatForwardPlanWithOpts("claude", body, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plan.Body), "cache_control") {
+		t.Fatalf("PromptCache=false must not emit cache_control: %s", plan.Body)
 	}
 }
 
@@ -336,14 +501,46 @@ func TestOpenAIXHighClampedToHigh(t *testing.T) {
 	}
 }
 
-func TestOpenAINonXHighReasoningUntouched(t *testing.T) {
+func TestOpenAINonXHighReasoningPreserved(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"high"}`)
 	plan, err := compileChatForwardPlan("openai", body)
 	if err != nil {
 		t.Fatalf("compile error: %v", err)
 	}
-	if !bytes.Equal(plan.Body, body) {
-		t.Fatalf("non-xhigh openai body should be untouched, got %s", plan.Body)
+	var got map[string]any
+	if err := json.Unmarshal(plan.Body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["reasoning_effort"] != "high" {
+		t.Fatalf("reasoning_effort = %v, want high untouched", got["reasoning_effort"])
+	}
+	messages := got["messages"].([]any)
+	if len(messages) != 2 || messages[0].(map[string]any)["role"] != "system" {
+		t.Fatalf("want injected system + original user, got %+v", messages)
+	}
+}
+
+// 用户自带 system 消息不被丢弃:内置块在前,用户块随后
+func TestOpenAIUserSystemPreservedAfterBuiltin(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"system","content":"custom rules"},{"role":"user","content":"hi"}]}`)
+	plan, err := compileChatForwardPlan("openai", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(plan.Body, &got); err != nil {
+		t.Fatal(err)
+	}
+	messages := got["messages"].([]any)
+	if len(messages) != 3 {
+		t.Fatalf("messages len = %d, want 3", len(messages))
+	}
+	if first := messages[0].(map[string]any); !strings.Contains(first["content"].(string), "HopBase AI Chat") {
+		t.Fatalf("first system should be builtin, got %+v", first)
+	}
+	if second := messages[1].(map[string]any); second["content"] != "custom rules" || second["role"] != "system" {
+		t.Fatalf("user system should follow builtin, got %+v", second)
 	}
 }

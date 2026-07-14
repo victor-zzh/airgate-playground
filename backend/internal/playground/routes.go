@@ -273,11 +273,41 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "request_too_large", err.Error())
 		return
 	}
-	plan, err := compileChatForwardPlan(platform, body)
+	opts := defaultCompileOpts()
+	opts.Tuning = p.chatTuningValue()
+	if lp := strings.ToLower(platform); lp == "claude" || lp == "anthropic" {
+		opts.LookupMaxOutput = func(model string) (int, bool) {
+			return p.lookupModelMaxOutput(ctx, "claude", model)
+		}
+	}
+	plan, err := compileChatForwardPlanWithOpts(platform, body, opts)
 	if err != nil {
 		logger.Warn("chat_forward_compile_failed", sdk.LogFieldPlatform, platform, sdk.LogFieldError, err)
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
 		return
+	}
+	// degradedPlan:上游 400 且错误指向 thinking/output_config/cache_control 时,
+	// 剥离对应字段重编译(防号池/中转不透传新字段),每请求至多重试一次。
+	degradedPlan := func(failBody []byte) *chatForwardPlan {
+		if plan.Platform != "claude" || opts.DisableThinking || opts.DisableCache {
+			return nil
+		}
+		dropThinking, dropCache := chatDegradeFlags(failBody)
+		if !dropThinking && !dropCache {
+			return nil
+		}
+		opts.DisableThinking = dropThinking
+		opts.DisableCache = dropCache
+		retryPlan, retryErr := compileChatForwardPlanWithOpts(platform, body, opts)
+		if retryErr != nil {
+			return nil
+		}
+		logger.Warn("chat_claude_degraded_retry",
+			"drop_thinking", dropThinking,
+			"drop_cache", dropCache,
+			sdk.LogFieldModel, plan.Model,
+		)
+		return retryPlan
 	}
 	var fields struct {
 		Stream *bool `json:"stream"`
@@ -296,16 +326,27 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	)
 	if !stream {
 		headers.Set("Accept", "application/json")
-		resp, err := hostForward(ctx, p.host, hostForwardRequest{
-			UserID:  int64(parseUserID(r)),
-			GroupID: 0,
-			Model:   plan.Model,
-			Method:  http.MethodPost,
-			Path:    plan.Path,
-			Headers: headers,
-			Body:    plan.Body,
-			Stream:  false,
-		})
+		doForward := func(fwdPlan *chatForwardPlan) (*hostForwardResponse, error) {
+			return hostForward(ctx, p.host, hostForwardRequest{
+				UserID:  int64(parseUserID(r)),
+				GroupID: 0,
+				Model:   fwdPlan.Model,
+				Method:  http.MethodPost,
+				Path:    fwdPlan.Path,
+				Headers: headers,
+				Body:    fwdPlan.Body,
+				Stream:  false,
+			})
+		}
+		resp, err := doForward(plan)
+		if err == nil && resp.StatusCode == http.StatusBadRequest {
+			if retryPlan := degradedPlan(resp.Body); retryPlan != nil {
+				if resp2, err2 := doForward(retryPlan); err2 == nil {
+					plan = retryPlan
+					resp = resp2
+				}
+			}
+		}
 		if err != nil {
 			logger.Warn("upstream_request_failed",
 				sdk.LogFieldPlatform, plan.Platform,
@@ -340,69 +381,118 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	headers.Set("Accept", "text/event-stream")
 
-	committed := false
-	var finalUsage *sdk.Usage
-	var bridge *claudeSSEBridge
-	if plan.NormalizeSSE {
-		bridge = &claudeSSEBridge{w: w, model: plan.ResponseModel}
+	// streamAttempt 执行一次流式转发。上游非 2xx 时不向客户端提交,缓冲错误体
+	// 返回(供 400 降级重试判定);2xx 正常边收边写。
+	type streamAttemptResult struct {
+		committed  bool
+		failStatus int
+		failHeader http.Header
+		failBody   []byte
+		usage      *sdk.Usage
+		err        error
 	}
-	err = hostForwardStream(ctx, p.host, hostForwardRequest{
-		UserID:  int64(parseUserID(r)),
-		GroupID: 0,
-		Model:   plan.Model,
-		Method:  http.MethodPost,
-		Path:    plan.Path,
-		Headers: headers,
-		Body:    plan.Body,
-		Stream:  true,
-	}, func(chunk hostForwardChunk) error {
-		if chunk.Done {
-			finalUsage = chunk.Usage
-			if bridge != nil {
-				return bridge.Flush()
+	const maxStreamFailBodyBytes = 64 << 10
+	streamAttempt := func(fwdPlan *chatForwardPlan) streamAttemptResult {
+		res := streamAttemptResult{}
+		var bridge *claudeSSEBridge
+		if fwdPlan.NormalizeSSE {
+			bridge = &claudeSSEBridge{w: w, model: fwdPlan.ResponseModel}
+		}
+		res.err = hostForwardStream(ctx, p.host, hostForwardRequest{
+			UserID:  int64(parseUserID(r)),
+			GroupID: 0,
+			Model:   fwdPlan.Model,
+			Method:  http.MethodPost,
+			Path:    fwdPlan.Path,
+			Headers: headers,
+			Body:    fwdPlan.Body,
+			Stream:  true,
+		}, func(chunk hostForwardChunk) error {
+			if chunk.Done {
+				res.usage = chunk.Usage
+				if bridge != nil && res.committed {
+					return bridge.Flush()
+				}
+				return nil
+			}
+			if !res.committed && res.failStatus == 0 {
+				status := chunk.StatusCode
+				if status == 0 {
+					status = http.StatusOK
+				}
+				if status >= http.StatusBadRequest {
+					res.failStatus = status
+					res.failHeader = chunk.Headers
+				} else {
+					copyStreamingHeaders(w.Header(), chunk.Headers, fwdPlan.NormalizeSSE)
+					if w.Header().Get("Content-Type") == "" {
+						w.Header().Set("Content-Type", "text/event-stream")
+					}
+					w.WriteHeader(status)
+					res.committed = true
+				}
+			}
+			if res.failStatus > 0 {
+				if len(chunk.Data) > 0 && len(res.failBody) < maxStreamFailBodyBytes {
+					res.failBody = append(res.failBody, chunk.Data...)
+				}
+				return nil
+			}
+			if len(chunk.Data) > 0 {
+				if bridge != nil {
+					if _, err := bridge.Write(chunk.Data); err != nil {
+						return err
+					}
+				} else {
+					if _, err := w.Write(chunk.Data); err != nil {
+						return err
+					}
+				}
+			}
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
 			}
 			return nil
+		})
+		return res
+	}
+
+	res := streamAttempt(plan)
+	if res.err == nil && res.failStatus == http.StatusBadRequest {
+		if retryPlan := degradedPlan(res.failBody); retryPlan != nil {
+			plan = retryPlan
+			res = streamAttempt(retryPlan)
 		}
-		if !committed {
-			copyStreamingHeaders(w.Header(), chunk.Headers, plan.NormalizeSSE)
-			if w.Header().Get("Content-Type") == "" {
-				w.Header().Set("Content-Type", "text/event-stream")
-			}
-			status := chunk.StatusCode
-			if status == 0 {
-				status = http.StatusOK
-			}
-			w.WriteHeader(status)
-			committed = true
-		}
-		if len(chunk.Data) > 0 {
-			if bridge != nil {
-				if _, err := bridge.Write(chunk.Data); err != nil {
-					return err
-				}
-			} else {
-				if _, err := w.Write(chunk.Data); err != nil {
-					return err
-				}
-			}
-		}
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
-		}
-		return nil
-	})
-	if err != nil {
+	}
+	if res.err != nil {
 		logger.Warn("upstream_request_failed",
 			sdk.LogFieldPlatform, plan.Platform,
 			sdk.LogFieldModel, plan.Model,
 			"stream", true,
-			sdk.LogFieldError, err,
+			sdk.LogFieldError, res.err,
 		)
-		if !committed {
-			writeHostForwardError(w, err)
+		if !res.committed {
+			writeHostForwardError(w, res.err)
 			return
 		}
 		_, _ = w.Write([]byte("data: {\"error\":{\"message\":\"请求暂时无法完成，请稍后重试\",\"type\":\"server_error\",\"code\":\"upstream_error\"}}\n\n"))
+		return
+	}
+	if res.failStatus > 0 {
+		// 上游错误体原样回给客户端(未提交过任何字节,可以完整改写响应)。
+		logger.Warn("upstream_request_failed",
+			sdk.LogFieldPlatform, plan.Platform,
+			sdk.LogFieldModel, plan.Model,
+			"stream", true,
+			sdk.LogFieldStatus, res.failStatus,
+		)
+		copyHeaders(w.Header(), res.failHeader)
+		if w.Header().Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", "application/json")
+		}
+		w.Header().Del("Content-Length")
+		w.WriteHeader(res.failStatus)
+		_, _ = w.Write(res.failBody)
 		return
 	}
 	logger.Debug("upstream_request_completed",
@@ -410,11 +500,11 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		sdk.LogFieldModel, plan.Model,
 		"stream", true,
 	)
-	if finalUsage != nil {
+	if res.usage != nil {
 		if plan.NormalizeSSE {
-			_ = writeOpenAIUsage(w, finalUsage, finalUsage.Model)
+			_ = writeOpenAIUsage(w, res.usage, res.usage.Model)
 		} else {
-			payload, _ := json.Marshal(map[string]any{"usage": finalUsage})
+			payload, _ := json.Marshal(map[string]any{"usage": res.usage})
 			_, _ = w.Write([]byte("data: "))
 			_, _ = w.Write(payload)
 			_, _ = w.Write([]byte("\n\n"))

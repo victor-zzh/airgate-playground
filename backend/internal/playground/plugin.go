@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
@@ -17,6 +18,19 @@ type Plugin struct {
 	db     *sql.DB
 	host   sdk.Host
 	svc    *Service
+
+	tuning *chatTuning
+
+	metaMu    sync.Mutex
+	metaCache map[string]modelMetaEntry
+}
+
+// chatTuningValue 返回生效的对话编译参数(Init 未跑到配置阶段时用默认值)。
+func (p *Plugin) chatTuningValue() chatTuning {
+	if p.tuning != nil {
+		return *p.tuning
+	}
+	return defaultChatTuning()
 }
 
 var _ sdk.ExtensionPlugin = (*Plugin)(nil)
@@ -45,6 +59,9 @@ func (p *Plugin) Init(ctx sdk.PluginContext) error {
 	}
 
 	cfg := ctx.Config()
+	tuning := resolveChatTuning(cfg)
+	p.tuning = &tuning
+
 	type dsnCandidate struct {
 		name string
 		dsn  string
@@ -137,6 +154,26 @@ func (p *Plugin) BackgroundTasks() []sdk.BackgroundTask {
 
 func (p *Plugin) Configured() bool {
 	return p.svc != nil
+}
+
+// resolveChatTuning 从插件配置解析对话编译参数(配置变更由 core 重启插件生效)。
+func resolveChatTuning(cfg sdk.PluginConfig) chatTuning {
+	tuning := defaultChatTuning()
+	if cfg == nil {
+		return tuning
+	}
+	tuning.SystemPrompt = strings.TrimSpace(cfg.GetString("chat_system_prompt"))
+	if raw := strings.TrimSpace(cfg.GetString("claude_prompt_cache")); raw != "" {
+		if v, err := strconv.ParseBool(raw); err == nil {
+			tuning.PromptCache = v
+		}
+	}
+	if raw := strings.TrimSpace(cfg.GetString("chat_default_max_tokens")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			tuning.DefaultMaxTokens = v
+		}
+	}
+	return tuning
 }
 
 func resolveMaxConversationsPerUser(cfg sdk.PluginConfig) int {

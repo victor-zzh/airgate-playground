@@ -8,12 +8,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
-const defaultClaudeMaxTokens = 4096
-
-// 开启 thinking 时 max_tokens 的保守封顶（低于当前所有 Claude 模型的 max_output）
-const maxClaudeThinkingMaxTokens = 60000
+// defaultChatMaxTokens 非思考请求的默认 max_tokens 上限(可经配置
+// chat_default_max_tokens 覆盖;计费按实际输出,抬高上限不直接涨成本)。
+const defaultChatMaxTokens = 32768
 
 type chatForwardPlan struct {
 	Platform      string
@@ -23,6 +23,35 @@ type chatForwardPlan struct {
 	NormalizeSSE  bool
 	NormalizeJSON bool
 	ResponseModel string
+}
+
+// chatTuning 对话编译的运行时可配参数(插件设置,进程内静态)。
+type chatTuning struct {
+	// SystemPrompt 非空时整体覆盖内置默认 system prompt。
+	SystemPrompt string
+	// PromptCache Claude 多轮 prompt caching 开关(默认开)。
+	PromptCache bool
+	// DefaultMaxTokens 非思考请求 max_tokens 上限。
+	DefaultMaxTokens int
+}
+
+func defaultChatTuning() chatTuning {
+	return chatTuning{PromptCache: true, DefaultMaxTokens: defaultChatMaxTokens}
+}
+
+// compileOpts 一次编译的依赖注入(便于测试)与降级开关。
+type compileOpts struct {
+	Tuning chatTuning
+	// LookupMaxOutput 查询模型 max_output_tokens(nil = 只用静态兜底表)。
+	LookupMaxOutput func(model string) (int, bool)
+	Now             time.Time
+	// DisableThinking / DisableCache:上游 400 降级重试时剥离对应字段。
+	DisableThinking bool
+	DisableCache    bool
+}
+
+func defaultCompileOpts() compileOpts {
+	return compileOpts{Tuning: defaultChatTuning(), Now: time.Now()}
 }
 
 type openAIChatRequest struct {
@@ -45,29 +74,34 @@ type claudeMessage struct {
 type claudeBlock map[string]any
 
 type claudeMessagesRequest struct {
-	Model     string          `json:"model"`
-	MaxTokens int             `json:"max_tokens"`
-	System    []claudeBlock   `json:"system,omitempty"`
-	Messages  []claudeMessage `json:"messages"`
-	Stream    bool            `json:"stream"`
-	Thinking  *claudeThinking `json:"thinking,omitempty"`
+	Model        string          `json:"model"`
+	MaxTokens    int             `json:"max_tokens"`
+	System       []claudeBlock   `json:"system,omitempty"`
+	Messages     []claudeMessage `json:"messages"`
+	Stream       bool            `json:"stream"`
+	Thinking     *claudeThinking `json:"thinking,omitempty"`
+	OutputConfig map[string]any  `json:"output_config,omitempty"`
 }
 
 type claudeThinking struct {
 	Type         string `json:"type"`
-	BudgetTokens int    `json:"budget_tokens"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
-// reasoning_effort → Anthropic extended thinking 预算。minimal 关闭思考。
-// max_tokens 必须大于 budget_tokens，编译时同步抬高。
+// reasoning_effort → ≤4.5 族 extended thinking 预算(4.6+ 族改走 adaptive +
+// output_config,见 planClaudeGeneration)。minimal 关闭思考。
 var claudeThinkingBudgets = map[string]int{
-	"low":    2048,
+	"low":    4096,
 	"medium": 8192,
 	"high":   16384,
 	"xhigh":  32768,
 }
 
 func compileChatForwardPlan(platform string, body []byte) (*chatForwardPlan, error) {
+	return compileChatForwardPlanWithOpts(platform, body, defaultCompileOpts())
+}
+
+func compileChatForwardPlanWithOpts(platform string, body []byte, opts compileOpts) (*chatForwardPlan, error) {
 	platform = strings.ToLower(strings.TrimSpace(platform))
 	if platform == "" {
 		return nil, fmt.Errorf("platform required")
@@ -84,13 +118,9 @@ func compileChatForwardPlan(platform string, body []byte) (*chatForwardPlan, err
 
 	switch platform {
 	case "openai":
-		// xhigh 是前端为 Claude thinking 提供的档位，OpenAI reasoning_effort 枚举
-		// 只到 high，透传会被上游 400 拒绝，降级到 high
-		outBody := body
-		if strings.EqualFold(strings.TrimSpace(req.ReasoningEffort), "xhigh") {
-			if clamped, err := clampReasoningEffort(body, "high"); err == nil {
-				outBody = clamped
-			}
+		outBody, err := compileOpenAIChatBody(req, body, opts)
+		if err != nil {
+			return nil, err
 		}
 		return &chatForwardPlan{
 			Platform:      platform,
@@ -100,7 +130,7 @@ func compileChatForwardPlan(platform string, body []byte) (*chatForwardPlan, err
 			ResponseModel: req.Model,
 		}, nil
 	case "claude", "anthropic":
-		compiled, err := compileClaudeMessagesBody(req)
+		compiled, err := compileClaudeMessagesBody(req, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -118,37 +148,53 @@ func compileChatForwardPlan(platform string, body []byte) (*chatForwardPlan, err
 	}
 }
 
-// clampReasoningEffort 把 body 里的 reasoning_effort 改为 to，保留其余字段。
-func clampReasoningEffort(body []byte, to string) ([]byte, error) {
+// compileOpenAIChatBody 在原 body 上做最小改写:注入默认 system 消息(前置,
+// 用户自带 system 保留在后),xhigh 档钳制到 high(OpenAI 枚举只到 high)。
+// 其余字段原样保留。
+func compileOpenAIChatBody(req openAIChatRequest, body []byte, opts compileOpts) ([]byte, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
-		return body, err
+		return nil, fmt.Errorf("invalid request body")
 	}
-	raw, err := json.Marshal(to)
+	if strings.EqualFold(strings.TrimSpace(req.ReasoningEffort), "xhigh") {
+		if raw, err := json.Marshal("high"); err == nil {
+			m["reasoning_effort"] = raw
+		}
+	}
+	var msgs []json.RawMessage
+	if raw, ok := m["messages"]; ok {
+		if err := json.Unmarshal(raw, &msgs); err != nil {
+			return nil, fmt.Errorf("invalid request body")
+		}
+	}
+	sysMsg, err := json.Marshal(map[string]string{
+		"role":    "system",
+		"content": buildOpenAISystemText(opts.Tuning.SystemPrompt, opts.Now),
+	})
 	if err != nil {
-		return body, err
+		return nil, err
 	}
-	m["reasoning_effort"] = raw
+	merged, err := json.Marshal(append([]json.RawMessage{sysMsg}, msgs...))
+	if err != nil {
+		return nil, err
+	}
+	m["messages"] = merged
 	return json.Marshal(m)
 }
 
-func compileClaudeMessagesBody(req openAIChatRequest) ([]byte, error) {
+func compileClaudeMessagesBody(req openAIChatRequest, opts compileOpts) ([]byte, error) {
+	gen := planClaudeGeneration(req.Model, req.ReasoningEffort, opts)
 	out := claudeMessagesRequest{
 		Model:     req.Model,
-		MaxTokens: defaultClaudeMaxTokens,
+		MaxTokens: gen.MaxTokens,
 		Stream:    req.Stream == nil || *req.Stream,
+		Thinking:  gen.Thinking,
 	}
-	if budget, ok := claudeThinkingBudgets[strings.ToLower(strings.TrimSpace(req.ReasoningEffort))]; ok {
-		out.Thinking = &claudeThinking{Type: "enabled", BudgetTokens: budget}
-		// max_tokens 须 > budget；封顶在保守上限内（当前所有 Claude 模型 max_output ≥64000，
-		// budget 最大 32768，budget+4096≤36864 始终安全，上限仅防目录覆盖层配异常值）
-		maxTokens := budget + defaultClaudeMaxTokens
-		if maxTokens > maxClaudeThinkingMaxTokens {
-			maxTokens = maxClaudeThinkingMaxTokens
-		}
-		out.MaxTokens = maxTokens
+	if gen.Effort != "" {
+		out.OutputConfig = map[string]any{"effort": gen.Effort}
 	}
 
+	var userSystem []claudeBlock
 	for _, msg := range req.Messages {
 		role := strings.ToLower(strings.TrimSpace(msg.Role))
 		blocks := openAIContentToClaudeBlocks(msg.Content)
@@ -158,7 +204,7 @@ func compileClaudeMessagesBody(req openAIChatRequest) ([]byte, error) {
 
 		switch role {
 		case "system":
-			out.System = append(out.System, blocks...)
+			userSystem = append(userSystem, blocks...)
 		case "assistant":
 			out.Messages = append(out.Messages, claudeMessage{Role: "assistant", Content: blocks})
 		case "user", "tool":
@@ -170,6 +216,14 @@ func compileClaudeMessagesBody(req openAIChatRequest) ([]byte, error) {
 
 	if len(out.Messages) == 0 {
 		return nil, fmt.Errorf("messages required")
+	}
+
+	cacheOn := opts.Tuning.PromptCache && !opts.DisableCache
+	out.System = buildClaudeSystemBlocks(opts.Tuning.SystemPrompt, userSystem, opts.Now, cacheOn)
+	if cacheOn {
+		// 增量断点:打在最后一条消息的最后一个块上,多轮会话逐轮命中前缀。
+		last := out.Messages[len(out.Messages)-1]
+		last.Content[len(last.Content)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
 	}
 
 	return json.Marshal(out)
@@ -493,4 +547,18 @@ func copyStreamingHeaders(dst, src http.Header, normalizeSSE bool) {
 	if normalizeSSE {
 		dst.Set("Content-Type", "text/event-stream")
 	}
+}
+
+// chatDegradeFlags 检查上游 400 错误体是否指向我们注入的 thinking/output_config/
+// cache_control 字段(号池/中转可能不透传新参数),决定降级重试要剥哪些。
+func chatDegradeFlags(errBody []byte) (dropThinking, dropCache bool) {
+	s := strings.ToLower(string(errBody))
+	for _, kw := range []string{"thinking", "output_config", "budget_tokens", "adaptive", "effort"} {
+		if strings.Contains(s, kw) {
+			dropThinking = true
+			break
+		}
+	}
+	dropCache = strings.Contains(s, "cache_control")
+	return dropThinking, dropCache
 }
