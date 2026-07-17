@@ -720,6 +720,14 @@ func imageContentTypeForObjectKey(objectKey string) string {
 		return "image/webp"
 	case strings.HasSuffix(strings.ToLower(objectKey), ".gif"):
 		return "image/gif"
+	case strings.HasSuffix(strings.ToLower(objectKey), ".mp4"):
+		return "video/mp4"
+	case strings.HasSuffix(strings.ToLower(objectKey), ".mov"):
+		return "video/quicktime"
+	case strings.HasSuffix(strings.ToLower(objectKey), ".webm"):
+		return "video/webm"
+	case strings.HasSuffix(strings.ToLower(objectKey), ".m4v"):
+		return "video/x-m4v"
 	default:
 		return "image/png"
 	}

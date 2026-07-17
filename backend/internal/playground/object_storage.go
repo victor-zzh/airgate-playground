@@ -14,7 +14,8 @@ import (
 
 const assetURIHost = "asset"
 
-var dataImageURLRE = regexp.MustCompile(`data:(image/(?:png|jpeg|jpg|webp|gif));base64,([A-Za-z0-9+/=]+)`)
+// 附件媒体 data URL：图片与视频（视频经 Gemini 系模型识别）共用资产落盘管线。
+var dataImageURLRE = regexp.MustCompile(`data:(image/(?:png|jpeg|jpg|webp|gif)|video/(?:mp4|quicktime|webm|x-m4v));base64,([A-Za-z0-9+/=]+)`)
 
 type ObjectStorage struct {
 	host sdk.Host
@@ -58,6 +59,14 @@ func extensionForContentType(contentType string) string {
 		return ".webp"
 	case "image/gif":
 		return ".gif"
+	case "video/mp4":
+		return ".mp4"
+	case "video/quicktime":
+		return ".mov"
+	case "video/webm":
+		return ".webm"
+	case "video/x-m4v":
+		return ".m4v"
 	default:
 		return ".bin"
 	}

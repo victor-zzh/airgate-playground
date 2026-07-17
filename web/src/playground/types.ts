@@ -10,6 +10,7 @@ export type PendingImage = {
   originalBytes?: number;
   finalBytes?: number;
   compressed?: boolean;
+  mediaKind?: 'image' | 'video';
   warningText?: string;
 };
 export type PendingFile = {

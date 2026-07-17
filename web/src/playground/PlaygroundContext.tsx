@@ -773,7 +773,8 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     setError('');
     try {
       const result = await processAttachments(files, {
-        imageCount: pendingImages.length,
+        imageCount: pendingImages.filter(item => item.mediaKind !== 'video').length,
+        videoCount: pendingImages.filter(item => item.mediaKind === 'video').length,
         attachmentCount: pendingImages.length + pendingFiles.length,
         totalRawBytes: pendingImages.reduce((sum, item) => sum + (item.originalBytes || 0), 0)
           + pendingFiles.reduce((sum, item) => sum + item.size, 0),
@@ -789,6 +790,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
           originalBytes: image.originalBytes,
           finalBytes: image.finalBytes,
           compressed: image.compressed,
+          mediaKind: image.mediaKind,
           warningText: image.warnings.map(issue => formatAttachmentIssue(t, issue)).join('；') || undefined,
         }))]);
       }

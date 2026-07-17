@@ -26,6 +26,17 @@ export const IMAGE_COMPRESSION_LADDER: ReadonlyArray<{ maxEdge: number; quality:
 export const IMAGE_PASSTHROUGH_MAX_EDGE = 2000;
 export const MODEL_FRIENDLY_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 
+// ── 视频（仅 Gemini 系模型可识别）──
+// 与图片共用 MAX_TOTAL_IMAGE_BINARY_BYTES 载荷预算；单视频上限留 2MB 余量给随附图片。
+export const MAX_VIDEOS_PER_MESSAGE = 1;
+export const MAX_VIDEO_RAW_BYTES = 18 * 1024 * 1024;
+export const VIDEO_CONTENT_TYPE_BY_EXT: ReadonlyArray<[RegExp, string]> = [
+  [/\.mp4$/i, 'video/mp4'],
+  [/\.mov$/i, 'video/quicktime'],
+  [/\.webm$/i, 'video/webm'],
+  [/\.m4v$/i, 'video/x-m4v'],
+];
+
 // ── PDF ──
 export const MAX_PDF_RAW_BYTES = 20 * 1024 * 1024;
 export const MAX_PDF_PAGES = 100;

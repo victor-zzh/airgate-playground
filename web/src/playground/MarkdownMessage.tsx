@@ -8,7 +8,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { marked } from 'marked';
 import { styles } from './styles';
-import { isSafeImageUrl, isSafeLinkUrl } from './utils';
+import { isSafeImageUrl, isSafeLinkUrl, isVideoAttachmentUrl } from './utils';
 
 // 宿主环境注入：图片/代码块/数学公式的实际渲染由 MessageRendering 提供
 // （它们依赖预览索引、hljs、KaTeX 等宿主能力），避免模块循环依赖。
@@ -74,6 +74,18 @@ function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
   const env = useEnv();
   const url = typeof src === 'string' ? src : '';
   if (!url) return null;
+  // 附件视频与图片共用 markdown 图片语法，按 URL 分流到 <video>（不走图片灯箱）
+  if (isVideoAttachmentUrl(url)) {
+    return (
+      <video
+        key={nextKey()}
+        src={url}
+        controls
+        preload="metadata"
+        style={{ maxWidth: '100%', maxHeight: 360, borderRadius: 10, display: 'block' }}
+      />
+    );
+  }
   return env.renderImage(nextKey(), url, alt || '');
 }
 

@@ -7,6 +7,8 @@ export function detectAttachmentKind(file: File): AttachmentKind | null {
   const type = (file.type || '').toLowerCase();
 
   if (type.startsWith('image/')) return 'image';
+  // 视频（Gemini 系模型可识别）：只收 Gemini 支持且浏览器可预览的常见容器
+  if (/\.(mp4|mov|webm|m4v)$/.test(name) || type.startsWith('video/')) return 'video';
   if (name.endsWith('.pdf') || type === 'application/pdf') return 'pdf';
   if (/\.(xlsx|xls)$/.test(name)
     || type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -24,6 +26,7 @@ export function detectAttachmentKind(file: File): AttachmentKind | null {
 export function attachmentAcceptList(): string {
   return [
     'image/*',
+    '.mp4', '.mov', '.webm', '.m4v',
     '.pdf',
     '.xlsx', '.xls',
     '.eml', '.msg', '.mht', '.mhtml', '.html', '.htm',

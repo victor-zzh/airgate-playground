@@ -98,7 +98,9 @@ export function Composer() {
                   }}
                   title={tooltip}
                 >
-                  <img src={image.url} alt={image.name} style={styles.imagePreview} />
+                  {image.mediaKind === 'video'
+                    ? <video src={image.url} muted playsInline style={styles.imagePreview} />
+                    : <img src={image.url} alt={image.name} style={styles.imagePreview} />}
                   {image.compressed && (
                     <span
                       style={{

@@ -7,7 +7,9 @@ export const SELECTED_MODEL_STORAGE_KEY = 'airgate.playground.selectedModel';
 export const THINKING_VISIBLE_STORAGE_KEY = 'airgate.playground.thinkingVisible';
 
 export const BASE64_DATA_URL_RE = /data:image\/(?:png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+/g;
-const MARKDOWN_IMAGE_URL_PATTERN = String.raw`data:image\/(?:png|jpeg|jpg|webp|gif);base64,[^)]+|https?:\/\/[^\s)]+|\/api\/v1\/ext-user\/airgate-playground\/assets\/[^\s)]+|\/assets-runtime\/[^\s)]+|blob:[^\s)]+`;
+// 附件视频与图片同走 markdown 图片语法内嵌（发送时转 image_url 分段），
+// 故 URL pattern 同时接受 data:video/*。
+const MARKDOWN_IMAGE_URL_PATTERN = String.raw`data:(?:image\/(?:png|jpeg|jpg|webp|gif)|video\/(?:mp4|quicktime|webm|x-m4v));base64,[^)]+|https?:\/\/[^\s)]+|\/api\/v1\/ext-user\/airgate-playground\/assets\/[^\s)]+|\/assets-runtime\/[^\s)]+|blob:[^\s)]+`;
 export const IMAGE_MARKDOWN_RE = new RegExp(String.raw`!\[[^\]]*\]\((${MARKDOWN_IMAGE_URL_PATTERN})\)`, 'g');
 export const IMAGE_MARKDOWN_ITEM_RE = new RegExp(String.raw`!\[([^\]]*)\]\((${MARKDOWN_IMAGE_URL_PATTERN})\)`, 'g');
 // 消息里的文件附件块：<file name="..." type="..." size="..." [truncated="true"]>...</file>

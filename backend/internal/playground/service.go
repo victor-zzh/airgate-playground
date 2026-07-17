@@ -426,7 +426,7 @@ func (s *Service) TruncateMessages(ctx context.Context, userID int, convID, afte
 }
 
 func (s *Service) storeContentAssets(ctx context.Context, userID int, convID int64, content string) (string, error) {
-	if s.storage == nil || !strings.Contains(content, "data:image/") {
+	if s.storage == nil || (!strings.Contains(content, "data:image/") && !strings.Contains(content, "data:video/")) {
 		return content, nil
 	}
 	var firstErr error

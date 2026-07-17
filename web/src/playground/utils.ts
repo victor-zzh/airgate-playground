@@ -120,12 +120,21 @@ export function formatByteSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
 }
 
+// 附件视频与图片共用 markdown 图片语法；渲染端按 URL 区分 <video> 与 <img>。
+export function isVideoAttachmentUrl(url: string): boolean {
+  if (url.startsWith('data:video/')) return true;
+  const clean = url.split(/[?#]/)[0].toLowerCase();
+  return /\.(mp4|mov|webm|m4v)$/.test(clean);
+}
+
 export function generatedImages(content: string): PreviewImage[] {
   const images: PreviewImage[] = [];
   let match: RegExpExecArray | null;
   IMAGE_MARKDOWN_ITEM_RE.lastIndex = 0;
 
   while ((match = IMAGE_MARKDOWN_ITEM_RE.exec(content)) !== null) {
+    // 视频不进图片灯箱（索引须与 MarkdownImage 的 takeImageIndex 计数保持一致）
+    if (isVideoAttachmentUrl(match[2])) continue;
     images.push({ alt: match[1], url: match[2] });
   }
 
@@ -227,7 +236,7 @@ export function isSafeLinkUrl(url: string) {
 }
 
 export function isSafeImageUrl(url: string) {
-  return /^(data:image\/(?:png|jpeg|jpg|webp|gif);base64,|https?:|blob:|\/assets-runtime\/|\/api\/v1\/ext-user\/airgate-playground\/assets\/)/i.test(url);
+  return /^(data:(?:image\/(?:png|jpeg|jpg|webp|gif)|video\/(?:mp4|quicktime|webm|x-m4v));base64,|https?:|blob:|\/assets-runtime\/|\/api\/v1\/ext-user\/airgate-playground\/assets\/)/i.test(url);
 }
 
 function escapeHtml(text: string) {

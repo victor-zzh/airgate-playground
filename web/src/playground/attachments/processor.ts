@@ -2,12 +2,14 @@ import { detectAttachmentKind } from './detect';
 import { extractEml } from './eml';
 import { extractMsg } from './msg';
 import { processImageFile } from './image';
+import { processVideoFile } from './video';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_EMAIL_CHARS,
   MAX_EMAIL_RAW_BYTES,
   MAX_IMAGES_PER_MESSAGE,
   MAX_TOTAL_IMAGE_BINARY_BYTES,
+  MAX_VIDEOS_PER_MESSAGE,
   MAX_PDF_CHARS,
   MAX_PDF_RAW_BYTES,
   MAX_SHEET_CHARS,
@@ -33,15 +35,16 @@ import {
   type ProcessedFile,
 } from './types';
 
-type FileKind = Exclude<AttachmentKind, 'image'>;
+type FileKind = Exclude<AttachmentKind, 'image' | 'video'>;
 
 // 已挂在输入框上的附件占用的额度，新文件在其基础上累计。
 export interface PendingSnapshot {
   imageCount: number;
+  videoCount: number;
   attachmentCount: number;
   totalRawBytes: number;
   extractedChars: number;
-  // 已有图片压缩后的二进制字节合计（控制单条消息 base64 总载荷）
+  // 已有图片/视频的二进制字节合计（控制单条消息 base64 总载荷）
   imageBinaryBytes: number;
 }
 
@@ -90,7 +93,7 @@ function toIssue(err: unknown): AttachmentIssue {
 // 逐文件失败不阻断整批，错误收集在 result.errors。
 export async function processAttachments(files: File[], snapshot: PendingSnapshot): Promise<ProcessResult> {
   const result: ProcessResult = { images: [], files: [], errors: [] };
-  let { imageCount, attachmentCount, totalRawBytes, extractedChars, imageBinaryBytes } = snapshot;
+  let { imageCount, videoCount, attachmentCount, totalRawBytes, extractedChars, imageBinaryBytes } = snapshot;
 
   for (const file of files) {
     try {
@@ -130,6 +133,37 @@ export async function processAttachments(files: File[], snapshot: PendingSnapsho
         attachmentCount += 1;
         totalRawBytes += file.size;
         imageBinaryBytes += compressed.finalBytes;
+        continue;
+      }
+
+      if (kind === 'video') {
+        if (videoCount + 1 > MAX_VIDEOS_PER_MESSAGE) {
+          throw new AttachmentError({
+            code: 'attachment.too_many_videos',
+            params: { limit: MAX_VIDEOS_PER_MESSAGE, defaultValue: '每条消息最多 1 个视频' },
+          });
+        }
+        const video = await processVideoFile(file);
+        if (imageBinaryBytes + video.bytes > MAX_TOTAL_IMAGE_BINARY_BYTES) {
+          throw new AttachmentError({
+            code: 'attachment.image_total_too_large',
+            params: { limit_mb: mbLabel(MAX_TOTAL_IMAGE_BINARY_BYTES) },
+          });
+        }
+        result.images.push({
+          id: nextAttachmentId(file),
+          name: file.name || 'video',
+          url: video.url,
+          originalBytes: file.size,
+          finalBytes: video.bytes,
+          compressed: false,
+          mediaKind: 'video',
+          warnings: video.warnings,
+        });
+        videoCount += 1;
+        attachmentCount += 1;
+        totalRawBytes += file.size;
+        imageBinaryBytes += video.bytes;
         continue;
       }
 
