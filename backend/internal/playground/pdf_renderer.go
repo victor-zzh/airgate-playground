@@ -3,7 +3,9 @@ package playground
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -34,11 +36,41 @@ func newPDFRenderer(cdpURL string) *pdfRenderer {
 	}
 }
 
+// resolveCDPURL 把 cdpURL 里的 docker 服务名解析成容器 IP。
+//
+// 新版 Chrome 对 DevTools 的 /json HTTP 端点做 DNS-rebinding 防护:Host 头只放行
+// IP 与 localhost 字面量,用服务名(如 http://chromium:9222)访问会被 500 拒,导致
+// 健康探测误判"不可达"而降级只出 Markdown。改用 IP 访问则 /json 与后续 wsUrl 全程
+// 不撞校验。每次调用重新解析,边车容器重建换 IP 也能跟上;已是 IP/localhost 或解析
+// 失败时原样返回(后续探测/连接自然失败并降级)。
+func (r *pdfRenderer) resolveCDPURL(ctx context.Context) string {
+	u, err := url.Parse(r.cdpURL)
+	if err != nil {
+		return r.cdpURL
+	}
+	host := u.Hostname()
+	if host == "" || net.ParseIP(host) != nil || strings.EqualFold(host, "localhost") {
+		return r.cdpURL
+	}
+	resolveCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupHost(resolveCtx, host)
+	if err != nil || len(addrs) == 0 {
+		return r.cdpURL
+	}
+	if port := u.Port(); port != "" {
+		u.Host = net.JoinHostPort(addrs[0], port)
+	} else {
+		u.Host = addrs[0]
+	}
+	return u.String()
+}
+
 // Healthy 探测边车 CDP 端点是否可达(短超时,失败即降级)。
 func (r *pdfRenderer) Healthy(ctx context.Context) bool {
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, r.cdpURL+"/json/version", nil)
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, r.resolveCDPURL(probeCtx)+"/json/version", nil)
 	if err != nil {
 		return false
 	}
@@ -62,7 +94,7 @@ func (r *pdfRenderer) RenderPDF(ctx context.Context, html []byte) ([]byte, error
 	renderCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
-	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(renderCtx, r.cdpURL)
+	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(renderCtx, r.resolveCDPURL(renderCtx))
 	defer cancelAlloc()
 	tabCtx, cancelTab := chromedp.NewContext(allocCtx)
 	defer cancelTab()
