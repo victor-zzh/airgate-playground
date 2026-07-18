@@ -42,7 +42,7 @@ func TestCompileChatForwardPlanOpenAIInjectsSystemAndKeepsFields(t *testing.T) {
 		t.Fatalf("first message role = %v, want system", sys["role"])
 	}
 	sysText := sys["content"].(string)
-	if !strings.Contains(sysText, "HopBase AI Chat") || !strings.Contains(sysText, "Current date:") {
+	if !strings.Contains(sysText, "capable AI assistant") || !strings.Contains(sysText, "Current date:") {
 		t.Fatalf("system text = %q, want builtin prompt + date", sysText)
 	}
 	if user := messages[1].(map[string]any); user["role"] != "user" || user["content"] != "hi" {
@@ -105,7 +105,7 @@ func TestCompileChatForwardPlanClaudeCompilesMessagesRequest(t *testing.T) {
 		t.Fatalf("system len = %d, want 3: %+v", len(system), system)
 	}
 	stable := system[0].(map[string]any)
-	if !strings.Contains(stable["text"].(string), "HopBase AI Chat") {
+	if !strings.Contains(stable["text"].(string), "capable AI assistant") {
 		t.Fatalf("system[0] = %+v, want builtin prompt", stable)
 	}
 	if cc, ok := stable["cache_control"].(map[string]any); !ok || cc["type"] != "ephemeral" {
@@ -537,7 +537,7 @@ func TestOpenAIUserSystemPreservedAfterBuiltin(t *testing.T) {
 	if len(messages) != 3 {
 		t.Fatalf("messages len = %d, want 3", len(messages))
 	}
-	if first := messages[0].(map[string]any); !strings.Contains(first["content"].(string), "HopBase AI Chat") {
+	if first := messages[0].(map[string]any); !strings.Contains(first["content"].(string), "capable AI assistant") {
 		t.Fatalf("first system should be builtin, got %+v", first)
 	}
 	if second := messages[1].(map[string]any); second["content"] != "custom rules" || second["role"] != "system" {

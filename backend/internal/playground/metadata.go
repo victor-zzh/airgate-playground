@@ -26,11 +26,11 @@ func BuildPluginInfo() sdk.PluginInfo {
 			},
 			{
 				Key:         "chat_system_prompt",
-				Label:       "自定义 System Prompt",
-				Type:        "string",
+				Label:       "补充 System Prompt（可选）",
+				Type:        "textarea",
 				Default:     "",
-				Description: "整体覆盖内置默认 system prompt（身份/语言跟随/Markdown 约定）。留空使用内置。注意：所路由分组的账号不能开启 claude_code_only（其 system 校验会拒绝自定义 prompt）。",
-				Placeholder: "",
+				Description: "追加在内置基础规则之后，适合填写 ToB / ToC 共用的品牌语气与业务边界；留空即只使用内置规则。不要写死单一站点品牌。注意：所路由分组的账号不能开启 claude_code_only（其 system 校验会拒绝自定义 prompt）。",
+				Placeholder: "示例：\n你服务同时使用 ToB 与 ToC 产品的用户。\n- 保持专业、友好、简洁\n- 涉及价格、配额、政策或服务状态时，不确定就明确说明，不要猜测\n- 不承诺未公开的功能、时效或服务等级",
 			},
 			{
 				Key:         "claude_prompt_cache",

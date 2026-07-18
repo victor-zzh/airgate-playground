@@ -27,7 +27,7 @@ type chatForwardPlan struct {
 
 // chatTuning 对话编译的运行时可配参数(插件设置,进程内静态)。
 type chatTuning struct {
-	// SystemPrompt 非空时整体覆盖内置默认 system prompt。
+	// SystemPrompt 非空时追加在内置基础规则之后。
 	SystemPrompt string
 	// PromptCache Claude 多轮 prompt caching 开关(默认开)。
 	PromptCache bool
