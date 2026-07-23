@@ -7,6 +7,7 @@ help: ## 显示帮助信息
 
 install: ## 安装前后端依赖
 	cd web && pnpm install
+	cd office-renderer && pnpm install
 	cd backend && $(GO) mod download
 
 build: build-web build-backend ## 完整构建
@@ -55,6 +56,7 @@ fmt: ## 格式化代码
 test: ## 运行测试
 	@cd backend && $(GO) test ./...
 	@cd web && pnpm test
+	@cd office-renderer && pnpm test
 
 vet: ## 静态分析
 	@cd backend && $(GO) vet ./...

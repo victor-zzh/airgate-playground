@@ -220,6 +220,40 @@ func TestClaudeSSEBridgeConvertsTextDeltasAndUsage(t *testing.T) {
 	}
 }
 
+func TestClaudeSSEBridgePreservesOutputLimitReason(t *testing.T) {
+	var out bytes.Buffer
+	bridge := &claudeSSEBridge{w: &out, model: "claude-sonnet-4-5-20250929"}
+	input := `data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":32768}}` + "\n\n"
+	if _, err := bridge.Write([]byte(input)); err != nil {
+		t.Fatalf("bridge.Write() error = %v", err)
+	}
+
+	got := out.String()
+	for _, want := range []string{`"finish_reason":"length"`, `"stop_reason":"max_tokens"`, `"output_tokens":32768`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output = %s, want %s", got, want)
+		}
+	}
+}
+
+func TestNormalizeFinishReason(t *testing.T) {
+	t.Parallel()
+	for input, want := range map[string]string{
+		"":                              "stop",
+		"end_turn":                      "stop",
+		"stop_sequence":                 "stop",
+		"max_tokens":                    "length",
+		"model_context_window_exceeded": "length",
+		"tool_use":                      "tool_calls",
+		"refusal":                       "content_filter",
+		"length":                        "length",
+	} {
+		if got := normalizeFinishReason(input); got != want {
+			t.Errorf("normalizeFinishReason(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestNormalizeClaudeMessageResponse(t *testing.T) {
 	body := []byte(`{
 		"id":"msg_123",

@@ -13,6 +13,9 @@ func TestChatSystemPromptTextUsesBrandNeutralBuiltin(t *testing.T) {
 	if strings.Contains(got, "HopBase") || strings.Contains(got, "Essevin") {
 		t.Fatalf("builtin prompt must stay brand neutral: %q", got)
 	}
+	if !strings.Contains(got, "PDF/Word, Excel, or PowerPoint") || !strings.Contains(got, "do not invent missing data") {
+		t.Fatalf("builtin prompt missing file accuracy rules: %q", got)
+	}
 }
 
 func TestChatSystemPromptTextAppendsAdminInstructions(t *testing.T) {

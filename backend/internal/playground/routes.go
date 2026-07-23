@@ -50,6 +50,7 @@ func (p *Plugin) RegisterRoutes(r sdk.RouteRegistrar) {
 	r.Handle(http.MethodGet, "/messages/", p.requireUser(p.handleListMessages))
 	r.Handle(http.MethodPut, "/messages/", p.requireUser(p.handleUpdateMessage))
 	r.Handle(http.MethodPost, "/messages", p.requireUser(p.handlePersistMessage))
+	r.Handle(http.MethodPost, "/exports", p.requireUser(p.handleDirectExport))
 	r.Handle(http.MethodPost, "/messages/truncate", p.requireUser(p.handleTruncateMessages))
 	r.Handle(http.MethodPost, "/chat/completions", p.requireUser(p.handleChatCompletions))
 
@@ -231,6 +232,152 @@ func (p *Plugin) handlePersistMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, msg)
+}
+
+// handleDirectExport renders an already-persisted message without calling an
+// upstream model. The response explicitly reports model_tokens=0 so clients
+// can distinguish this path from AI-authored generation.
+func (p *Plugin) handleDirectExport(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MessageID int64  `json:"message_id"`
+		Format    string `json:"format"`
+		Title     string `json:"title"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 32<<10)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	format := strings.ToLower(strings.TrimSpace(req.Format))
+	if req.MessageID <= 0 || !isDirectExportFormat(format) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message_id and format(pdf, docx, pptx, xlsx) are required"})
+		return
+	}
+	if !p.directExportEnabled(format) {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": format + " export is not enabled"})
+		return
+	}
+	message, conversation, err := p.svc.GetMessageForExport(r.Context(), parseUserID(r), req.MessageID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	title := sanitizeDocumentTitle(req.Title)
+	if strings.TrimSpace(req.Title) == "" {
+		title = sanitizeDocumentTitle(conversation.Title)
+	}
+	content := stripDuplicateLeadingTitle(title, message.Content)
+	var data []byte
+	switch format {
+	case "pdf":
+		if p.pdf == nil || !p.pdf.Healthy(r.Context()) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PDF renderer unavailable"})
+			return
+		}
+		html, renderErr := renderDocumentHTML(title, []byte(content))
+		if renderErr == nil {
+			data, renderErr = p.pdf.RenderPDF(r.Context(), html)
+		}
+		if renderErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "PDF export failed: " + renderErr.Error()})
+			return
+		}
+	case "docx":
+		if p.office == nil || !p.office.Healthy(r.Context()) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Office renderer unavailable"})
+			return
+		}
+		data, err = p.office.RenderDOCX(r.Context(), title, content)
+	case "xlsx":
+		input, parseErr := markdownToSpreadsheet(title, content)
+		if parseErr == nil {
+			data, parseErr = renderSpreadsheet(input)
+		}
+		err = parseErr
+	case "pptx":
+		if p.office == nil || !p.office.Healthy(r.Context()) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Office renderer unavailable"})
+			return
+		}
+		input, parseErr := markdownToPresentation(title, content)
+		if parseErr == nil {
+			data, parseErr = p.office.RenderPPTX(r.Context(), input)
+		}
+		err = parseErr
+	}
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": format + " export failed: " + err.Error()})
+		return
+	}
+	maxSize := int64(maxDocumentPDFBytes)
+	contentType, extension := "application/pdf", ".pdf"
+	switch format {
+	case "docx":
+		maxSize = maxDocumentDOCXBytes
+		contentType, extension = "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx"
+	case "pptx":
+		maxSize = maxOfficeRendererResponseBytes
+		contentType, extension = "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx"
+	case "xlsx":
+		maxSize = maxSpreadsheetBytes
+		contentType, extension = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"
+	}
+	if int64(len(data)) > maxSize {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": format + " export exceeds size limit"})
+		return
+	}
+	asset, err := p.svc.Storage().StoreDocumentBytes(r.Context(), parseUserID(r), contentType, extension, data)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "export asset save failed"})
+		return
+	}
+	if err := p.svc.RegisterConversationAsset(r.Context(), parseUserID(r), conversation.ID, asset); err != nil {
+		_ = p.svc.Storage().Delete(r.Context(), asset.ObjectKey)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "export asset registration failed"})
+		return
+	}
+	tc := &toolContext{userID: int64(parseUserID(r)), conversationID: conversation.ID, requestID: sdk.ExtractOrGenerateRequestID(r.Header), logger: p.logger}
+	usage, err := p.chargeRenderUsage(r.Context(), tc, format, asset.ID, asset.SizeBytes, 1)
+	if err != nil {
+		_ = p.svc.RemoveConversationAsset(r.Context(), parseUserID(r), conversation.ID, asset)
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "export render fee could not be charged: " + err.Error()})
+		return
+	}
+	response := map[string]any{
+		"file": map[string]any{
+			"name": title + extension, "content_type": contentType, "size": asset.SizeBytes,
+			"src": asset.PublicURL, "asset_uri": assetURI(asset.ID),
+		},
+		"model_tokens": 0,
+		"render_fee":   0.0,
+	}
+	if usage != nil {
+		response["usage"] = usage
+		response["render_fee"] = usage.UserCost
+	}
+	writeJSON(w, http.StatusCreated, response)
+}
+
+func isDirectExportFormat(format string) bool {
+	switch format {
+	case "pdf", "docx", "pptx", "xlsx":
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *Plugin) directExportEnabled(format string) bool {
+	settings := p.toolSettingsValue()
+	switch format {
+	case "pdf":
+		return settings.GenerateDocumentEnabled && p.pdf != nil
+	case "docx", "pptx":
+		return settings.GenerateOfficeEnabled && p.office != nil
+	case "xlsx":
+		return settings.GenerateSpreadsheetEnabled
+	default:
+		return false
+	}
 }
 
 func (p *Plugin) handleUpdateMessage(w http.ResponseWriter, r *http.Request) {

@@ -7,7 +7,7 @@ export type StreamPartKind = 'reasoning' | 'text';
 export type StreamTextPart = { kind: StreamPartKind; text: string };
 
 // 工具调用 part：状态机 running → complete/error；result 为后端 tool_call_finished
-// 下发的载荷（web_search→{sources}，generate_document→{file}）。
+// 下发的载荷（web_search→{sources}，文件生成工具→{file}）。
 export type ToolCallStatus = 'running' | 'complete' | 'error';
 export type StreamToolPart = {
   kind: 'tool';

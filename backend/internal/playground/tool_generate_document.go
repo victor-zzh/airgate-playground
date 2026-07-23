@@ -6,29 +6,33 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 )
 
 // ── generate_document 工具 ────────────────────────────────────────────────────
-// 模型产出 Markdown 报告 → 恒存 .md 资产;format=pdf 再经 goldmark→bluemonday
-// →chromedp 转 A4 PDF。资产入 playground_assets(带会话归属,纳入孤儿清理与
-// 会话删除链路)。边车不可用/渲染失败降级只出 MD。
+// 模型产出受控 Markdown，按请求生成 Markdown/PDF/DOCX。PDF 经 Chromium，
+// DOCX 经 office-renderer；请求哪种格式就必须交付哪种格式，失败不降级冒充。
 
 const (
 	maxDocumentContentBytes = 512 << 10
 	maxDocumentPDFBytes     = 10 << 20
+	maxDocumentDOCXBytes    = 20 << 20
 )
 
 type generateDocumentTool struct {
-	plugin *Plugin
+	plugin  *Plugin
+	formats []string
 }
 
 func (t *generateDocumentTool) Name() string { return "generate_document" }
 
 func (t *generateDocumentTool) Description() string {
-	return "Create a downloadable document (report, summary, analysis) for the user. Write the full document content in Markdown (GFM tables and code blocks supported). The document is delivered to the user as a file card — after calling this tool, briefly summarize the key points instead of repeating the full content."
+	return fmt.Sprintf("Create a downloadable %s document. Write the full content in Markdown (GFM tables and code blocks supported). The file card completes the response, so do not add a summary after calling the tool.", strings.Join(t.supportedFormats(), "/"))
 }
 
 func (t *generateDocumentTool) InputSchema() map[string]any {
+	formats := t.supportedFormats()
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -38,17 +42,33 @@ func (t *generateDocumentTool) InputSchema() map[string]any {
 			},
 			"format": map[string]any{
 				"type":        "string",
-				"enum":        []string{"pdf", "markdown"},
-				"description": "Output format (default pdf; markdown delivers the raw .md file).",
+				"enum":        formats,
+				"description": "Required output format. Use docx for Microsoft Word.",
 			},
 			"content": map[string]any{
 				"type":        "string",
 				"description": "The complete document content in Markdown.",
 			},
 		},
-		"required":             []string{"title", "content"},
+		"required":             []string{"title", "format", "content"},
 		"additionalProperties": false,
 	}
+}
+
+func (t *generateDocumentTool) supportedFormats() []string {
+	if len(t.formats) == 0 {
+		return []string{"pdf", "markdown"}
+	}
+	return append([]string(nil), t.formats...)
+}
+
+func (t *generateDocumentTool) supportsFormat(format string) bool {
+	for _, candidate := range t.supportedFormats() {
+		if candidate == format {
+			return true
+		}
+	}
+	return false
 }
 
 var docFilenameSanitizer = regexp.MustCompile(`[\\/:*?"<>|\x00-\x1f]+`)
@@ -72,8 +92,8 @@ func (t *generateDocumentTool) Execute(ctx context.Context, tc *toolContext, arg
 		Format  string `json:"format"`
 		Content string `json:"content"`
 	}
-	if err := json.Unmarshal(args, &input); err != nil || strings.TrimSpace(input.Content) == "" || strings.TrimSpace(input.Title) == "" {
-		return &toolOutcome{ForModel: "generate_document 参数无效:需要非空 title 与 content(Markdown)", IsError: true}, nil
+	if err := json.Unmarshal(args, &input); err != nil || strings.TrimSpace(input.Content) == "" || strings.TrimSpace(input.Title) == "" || strings.TrimSpace(input.Format) == "" {
+		return &toolOutcome{ForModel: "generate_document 参数无效:需要非空 title、format 与 content(Markdown)", IsError: true}, nil
 	}
 	if tc.conversationID <= 0 {
 		return &toolOutcome{ForModel: "当前请求缺少会话上下文,无法保存文档;请提示用户在会话中重试", IsError: true}, nil
@@ -88,33 +108,42 @@ func (t *generateDocumentTool) Execute(ctx context.Context, tc *toolContext, arg
 
 	title := sanitizeDocumentTitle(input.Title)
 	format := strings.ToLower(strings.TrimSpace(input.Format))
-	if format == "" {
-		format = "pdf"
+	if !t.supportsFormat(format) {
+		return &toolOutcome{ForModel: fmt.Sprintf("不支持格式 %q，可用格式：%s", format, strings.Join(t.supportedFormats(), ", ")), IsError: true}, nil
 	}
 
-	// 恒存 .md(PDF 失败时的兜底交付物,也方便用户二次编辑)
-	mdAsset, err := storage.StoreDocumentBytes(ctx, int(tc.userID), "text/markdown", ".md", []byte(input.Content))
+	var deliver *StoredAsset
+	var deliverName, deliverType string
+	var err error
+	renderContent := stripDuplicateLeadingTitle(title, input.Content)
+	switch format {
+	case "markdown":
+		deliver, err = storage.StoreDocumentBytes(ctx, int(tc.userID), "text/markdown", ".md", []byte(input.Content))
+		deliverName, deliverType = title+".md", "text/markdown"
+	case "pdf":
+		deliver, err = t.renderAndStorePDF(ctx, tc, title, renderContent)
+		deliverName, deliverType = title+".pdf", "application/pdf"
+	case "docx":
+		deliver, err = t.renderAndStoreDOCX(ctx, tc, title, renderContent)
+		deliverName, deliverType = title+".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	}
 	if err != nil {
-		tc.logger.Warn("generate_document_store_md_failed", "error", err)
-		return &toolOutcome{ForModel: "文档保存失败,请稍后重试", IsError: true}, nil
+		tc.logger.Warn("generate_document_failed", "format", format, "error", err)
+		return &toolOutcome{ForModel: fmt.Sprintf("%s 文件生成失败：%v", strings.ToUpper(format), err), IsError: true}, nil
 	}
-	if err := t.plugin.svc.RegisterConversationAsset(ctx, int(tc.userID), tc.conversationID, mdAsset); err != nil {
-		tc.logger.Warn("generate_document_register_md_failed", "error", err)
+	if format == "markdown" {
+		if err := t.plugin.svc.RegisterConversationAsset(ctx, int(tc.userID), tc.conversationID, deliver); err != nil {
+			tc.logger.Warn("generate_document_register_markdown_failed", "error", err)
+			_ = storage.Delete(ctx, deliver.ObjectKey)
+			return &toolOutcome{ForModel: "文档已生成但会话资产登记失败，请稍后重试", IsError: true}, nil
+		}
 	}
-
-	deliver := mdAsset
-	deliverName := title + ".md"
-	deliverType := "text/markdown"
-	pdfNote := ""
-	if format == "pdf" {
-		pdfAsset, pdfErr := t.renderAndStorePDF(ctx, tc, title, input.Content)
-		if pdfErr != nil {
-			tc.logger.Warn("generate_document_pdf_degraded", "error", pdfErr)
-			pdfNote = "(PDF 转换暂不可用,已生成 Markdown 版本)"
-		} else {
-			deliver = pdfAsset
-			deliverName = title + ".pdf"
-			deliverType = "application/pdf"
+	var usage *sdk.Usage
+	if format != "markdown" {
+		usage, err = t.plugin.chargeRenderUsage(ctx, tc, format, deliver.ID, deliver.SizeBytes, 1)
+		if err != nil {
+			_ = t.plugin.svc.RemoveConversationAsset(ctx, int(tc.userID), tc.conversationID, deliver)
+			return &toolOutcome{ForModel: fmt.Sprintf("%s 已渲染但文件费用入账失败：%v", strings.ToUpper(format), err), IsError: true}, nil
 		}
 	}
 
@@ -129,9 +158,62 @@ func (t *generateDocumentTool) Execute(ctx context.Context, tc *toolContext, arg
 			"asset_uri": assetURI(deliver.ID),
 		},
 	}
-	forModel := fmt.Sprintf("已生成文档《%s》(%s, %dKB)并作为文件卡片交付给用户%s。不要在回复中重复文档全文,只需简述要点。",
-		title, strings.TrimPrefix(deliverType, "application/"), deliver.SizeBytes>>10, pdfNote)
-	return &toolOutcome{ForModel: forModel, ForClient: forClient}, nil
+	forModel := fmt.Sprintf("已生成文档《%s》(%s, %dKB)并作为文件卡片交付给用户。",
+		title, strings.ToUpper(format), deliver.SizeBytes>>10)
+	return &toolOutcome{
+		ForModel:        forModel,
+		ForClient:       forClient,
+		Terminal:        true,
+		TerminalMessage: "文件已生成，可通过文件卡下载。",
+		Usage:           usage,
+	}, nil
+}
+
+func stripDuplicateLeadingTitle(title, content string) string {
+	trimmed := strings.TrimLeft(content, " \t\r\n")
+	lineEnd := strings.IndexByte(trimmed, '\n')
+	firstLine := trimmed
+	if lineEnd >= 0 {
+		firstLine = trimmed[:lineEnd]
+	}
+	heading := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(firstLine), "#"))
+	if !strings.HasPrefix(strings.TrimSpace(firstLine), "# ") || !strings.EqualFold(heading, strings.TrimSpace(title)) {
+		return content
+	}
+	if lineEnd < 0 {
+		return content
+	}
+	rest := strings.TrimLeft(trimmed[lineEnd+1:], "\r\n")
+	if rest == "" {
+		// Keep a title-only document valid for DOCX/renderer implementations
+		// that require non-empty body content.
+		return content
+	}
+	return rest
+}
+
+func (t *generateDocumentTool) renderAndStoreDOCX(ctx context.Context, tc *toolContext, title, content string) (*StoredAsset, error) {
+	renderer := t.plugin.office
+	if renderer == nil || !renderer.Healthy(ctx) {
+		return nil, fmt.Errorf("Office renderer 不可达")
+	}
+	docx, err := renderer.RenderDOCX(ctx, title, content)
+	if err != nil {
+		return nil, err
+	}
+	if len(docx) > maxDocumentDOCXBytes {
+		return nil, fmt.Errorf("DOCX 超过 20MB 上限")
+	}
+	asset, err := t.plugin.svc.Storage().StoreDocumentBytes(ctx, int(tc.userID), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx", docx)
+	if err != nil {
+		return nil, err
+	}
+	if err := t.plugin.svc.RegisterConversationAsset(ctx, int(tc.userID), tc.conversationID, asset); err != nil {
+		tc.logger.Warn("generate_document_register_docx_failed", "error", err)
+		_ = t.plugin.svc.Storage().Delete(ctx, asset.ObjectKey)
+		return nil, fmt.Errorf("会话资产登记失败: %w", err)
+	}
+	return asset, nil
 }
 
 func (t *generateDocumentTool) renderAndStorePDF(ctx context.Context, tc *toolContext, title, content string) (*StoredAsset, error) {
@@ -159,6 +241,8 @@ func (t *generateDocumentTool) renderAndStorePDF(ctx context.Context, tc *toolCo
 	}
 	if err := t.plugin.svc.RegisterConversationAsset(ctx, int(tc.userID), tc.conversationID, asset); err != nil {
 		tc.logger.Warn("generate_document_register_pdf_failed", "error", err)
+		_ = t.plugin.svc.Storage().Delete(ctx, asset.ObjectKey)
+		return nil, fmt.Errorf("会话资产登记失败: %w", err)
 	}
 	return asset, nil
 }

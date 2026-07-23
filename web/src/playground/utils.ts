@@ -346,6 +346,26 @@ export function isTailRecoverable(params: {
   );
 }
 
+// 回答达到输出上限时保留已生成内容，并提供显式续写入口。结束原因随消息持久化，
+// 因此刷新会话后提示仍然成立；一旦用户继续对话，末位不再是该助手消息，提示消失。
+export function isTailOutputLimited(params: {
+  activeId: number | null;
+  isStreaming: boolean;
+  isSubmitting: boolean;
+  hasError: boolean;
+  lastRole: string | undefined;
+  finishReason: string | undefined;
+}): boolean {
+  return Boolean(
+    params.activeId &&
+    !params.isStreaming &&
+    !params.isSubmitting &&
+    !params.hasError &&
+    params.lastRole === 'assistant' &&
+    params.finishReason === 'length',
+  );
+}
+
 export async function copyText(text: string) {
   if (navigator.clipboard?.writeText && window.isSecureContext) {
     await navigator.clipboard.writeText(text);

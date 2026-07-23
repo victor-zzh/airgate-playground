@@ -47,7 +47,9 @@ export const SCANNED_PDF_CHARS_PER_PAGE = 30;
 // ── Excel ──
 export const MAX_SHEET_RAW_BYTES = 10 * 1024 * 1024;
 export const MAX_SHEETS_PER_WORKBOOK = 20;
-export const MAX_ROWS_PER_SHEET = 200;
+// 行上限只防异常工作簿；实际可发送量仍受单文件 150k、单消息 240k 字符预算约束。
+// 旧值 200 会让体积很小的窄表也过早截断，影响需求清单、日志等常见业务文件。
+export const MAX_ROWS_PER_SHEET = 1000;
 export const MAX_COLS_PER_SHEET = 40;
 export const MAX_CELL_CHARS = 200;
 export const MAX_SHEET_CHARS = 150_000;

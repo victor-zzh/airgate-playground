@@ -24,9 +24,11 @@ const (
 )
 
 type toolLoopStats struct {
-	iterations int
-	toolCalls  int
-	usage      *sdk.Usage
+	iterations         int
+	toolCalls          int
+	usage              *sdk.Usage
+	finishReason       string
+	upstreamStopReason string
 }
 
 func (p *Plugin) runToolLoop(
@@ -84,7 +86,7 @@ func (p *Plugin) runToolLoop(
 	}
 
 	writeAggregatedUsage(w, stats.usage, stats.iterations, stats.toolCalls)
-	writeChatFinish(w, req.Model)
+	writeChatFinish(w, req.Model, stats.finishReason, stats.upstreamStopReason)
 	logger.Debug("tool_loop_completed",
 		"iterations", stats.iterations,
 		"tool_calls", stats.toolCalls,
@@ -137,8 +139,8 @@ func (p *Plugin) runClaudeToolLoop(
 		}
 
 		accum := newClaudeStreamAccumulator()
-		bridge := &claudeSSEBridge{w: w, model: req.Model, onEvent: accum.handle}
-		usage, failStatus, failBody, err := p.streamLoopIteration(ctx, r, "claude", "/v1/messages", payload, func(data []byte) error {
+		bridge := &claudeSSEBridge{w: w, model: req.Model, suppressFinish: true, onEvent: accum.handle}
+		usage, failStatus, failBody, err := p.streamLoopIteration(ctx, r, "claude", "/v1/messages", payload, tc.requestID, stats.iterations, func(data []byte) error {
 			_, err := bridge.Write(data)
 			if err == nil {
 				flushIfPossible(w)
@@ -155,6 +157,8 @@ func (p *Plugin) runClaudeToolLoop(
 			return err
 		}
 		stats.usage = mergeUsage(stats.usage, usage)
+		stats.finishReason = accum.stopReason
+		stats.upstreamStopReason = accum.stopReason
 
 		calls := accum.toolCalls()
 		if len(calls) == 0 || accum.stopReason != claudeStopReasonToolUse || forcedFinal {
@@ -166,6 +170,16 @@ func (p *Plugin) runClaudeToolLoop(
 		results := p.executeToolCalls(ctx, w, tools, calls, tc, stats, logger)
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if terminal := terminalToolResult(results); terminal != nil {
+			stats.finishReason = "stop"
+			if terminal.TerminalMessage != "" {
+				if err := writeOpenAIContentDelta(w, req.Model, terminal.TerminalMessage); err != nil {
+					return err
+				}
+				flushIfPossible(w)
+			}
+			return nil
 		}
 		blocks := make([]claudeBlock, 0, len(results))
 		for _, res := range results {
@@ -238,7 +252,7 @@ func (p *Plugin) runOpenAIToolLoop(
 		}
 
 		filter := newOpenAIStreamFilter(w)
-		usage, failStatus, failBody, err := p.streamLoopIteration(ctx, r, "openai", "/v1/chat/completions", payload, func(data []byte) error {
+		usage, failStatus, failBody, err := p.streamLoopIteration(ctx, r, "openai", "/v1/chat/completions", payload, tc.requestID, stats.iterations, func(data []byte) error {
 			_, err := filter.Write(data)
 			return err
 		})
@@ -252,6 +266,8 @@ func (p *Plugin) runOpenAIToolLoop(
 			return err
 		}
 		stats.usage = mergeUsage(stats.usage, usage)
+		stats.finishReason = filter.finishReason
+		stats.upstreamStopReason = filter.finishReason
 
 		calls := filter.accumulated()
 		if len(calls) == 0 || forcedFinal {
@@ -284,6 +300,16 @@ func (p *Plugin) runOpenAIToolLoop(
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if terminal := terminalToolResult(results); terminal != nil {
+			stats.finishReason = "stop"
+			if terminal.TerminalMessage != "" {
+				if err := writeOpenAIContentDelta(w, req.Model, terminal.TerminalMessage); err != nil {
+					return err
+				}
+				flushIfPossible(w)
+			}
+			return nil
+		}
 		for _, res := range results {
 			toolMsg := map[string]any{
 				"role":         "tool",
@@ -308,6 +334,8 @@ func (p *Plugin) streamLoopIteration(
 	r *http.Request,
 	platform, path string,
 	payload []byte,
+	traceID string,
+	iteration int,
 	sink func([]byte) error,
 ) (usage *sdk.Usage, failStatus int, failBody []byte, err error) {
 	headers := make(http.Header)
@@ -324,14 +352,16 @@ func (p *Plugin) streamLoopIteration(
 	}
 	const maxFailBody = 64 << 10
 	err = hostForwardStream(ctx, p.host, hostForwardRequest{
-		UserID:  int64(parseUserID(r)),
-		GroupID: 0,
-		Model:   model,
-		Method:  http.MethodPost,
-		Path:    path,
-		Headers: headers,
-		Body:    payload,
-		Stream:  true,
+		UserID:    int64(parseUserID(r)),
+		GroupID:   0,
+		RequestID: fmt.Sprintf("%s:%d", traceID, iteration),
+		TraceID:   traceID,
+		Model:     model,
+		Method:    http.MethodPost,
+		Path:      path,
+		Headers:   headers,
+		Body:      payload,
+		Stream:    true,
 	}, func(chunk hostForwardChunk) error {
 		if chunk.Done {
 			usage = chunk.Usage
@@ -410,6 +440,9 @@ func (p *Plugin) executeToolCalls(
 		if outcome.IsError {
 			status = "error"
 			errText = truncateForModel(outcome.ForModel, 300)
+		}
+		if outcome.Usage != nil {
+			stats.usage = mergeUsage(stats.usage, outcome.Usage)
 		}
 		_ = writeToolEvent(w, "tool_call_finished", stats.iterations, toolEventCall{
 			ID:         call.ID,

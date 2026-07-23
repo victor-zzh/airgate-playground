@@ -2,8 +2,11 @@ package playground
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +39,28 @@ func TestResolveMaxConversationsPerUser(t *testing.T) {
 	}
 }
 
+func TestClampRenderFee(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name             string
+		total, renderFee float64
+		want             float64
+	}{
+		{name: "valid split", total: 0.28, renderFee: 0.03, want: 0.03},
+		{name: "free render", total: 0.25, renderFee: 0, want: 0},
+		{name: "negative render", total: 0.25, renderFee: -1, want: 0},
+		{name: "render exceeds total", total: 0.02, renderFee: 0.03, want: 0.02},
+		{name: "negative total", total: -1, renderFee: 0.03, want: 0},
+		{name: "nan", total: 1, renderFee: math.NaN(), want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := clampRenderFee(tc.total, tc.renderFee); got != tc.want {
+				t.Fatalf("clampRenderFee(%v, %v) = %v, want %v", tc.total, tc.renderFee, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDeleteAssetsFromStorageInvokesHostDelete(t *testing.T) {
 	t.Parallel()
 
@@ -53,6 +78,53 @@ func TestDeleteAssetsFromStorageInvokesHostDelete(t *testing.T) {
 	}
 	if len(host.deleted) != 1 || host.deleted[0] != "chat/42/202605/image.png" {
 		t.Fatalf("删除对象 = %#v，期望删除 chat/42/202605/image.png", host.deleted)
+	}
+}
+
+func TestRefreshToolCallAssetURLs(t *testing.T) {
+	t.Parallel()
+	raw := json.RawMessage(`[{"id":"call-1","result":{"file":{"name":"report.pdf","src":"https://old.example/expired","asset_uri":"airgate-asset://asset/abc123"}}}]`)
+
+	resolved, err := refreshToolCallAssetURLs(raw, func(assetURI string) (string, error) {
+		if assetURI != "airgate-asset://asset/abc123" {
+			t.Fatalf("asset URI = %q", assetURI)
+		}
+		return "https://new.example/signed", nil
+	})
+	if err != nil {
+		t.Fatalf("refresh tool call asset URL: %v", err)
+	}
+
+	var calls []struct {
+		Result struct {
+			File struct {
+				Src      string `json:"src"`
+				AssetURI string `json:"asset_uri"`
+			} `json:"file"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(resolved, &calls); err != nil {
+		t.Fatalf("decode resolved tool calls: %v", err)
+	}
+	if len(calls) != 1 || calls[0].Result.File.Src != "https://new.example/signed" {
+		t.Fatalf("resolved calls = %s", resolved)
+	}
+	if calls[0].Result.File.AssetURI != "airgate-asset://asset/abc123" {
+		t.Fatalf("stable asset URI was changed: %s", resolved)
+	}
+}
+
+func TestRefreshToolCallAssetURLsKeepsOriginalOnResolveError(t *testing.T) {
+	t.Parallel()
+	raw := json.RawMessage(`[{"result":{"file":{"src":"https://old.example/expired","asset_uri":"airgate-asset://asset/missing"}}}]`)
+	resolved, err := refreshToolCallAssetURLs(raw, func(string) (string, error) {
+		return "", fmt.Errorf("asset not found")
+	})
+	if err == nil {
+		t.Fatal("expected resolver error")
+	}
+	if !strings.Contains(string(resolved), "https://old.example/expired") {
+		t.Fatalf("old URL should remain on error: %s", resolved)
 	}
 }
 

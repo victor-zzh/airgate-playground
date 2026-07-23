@@ -39,6 +39,7 @@ import {
   defaultModelOptionValue,
   getStoredActiveConversationId,
   getStoredSelectedModel,
+  isTailOutputLimited,
   isTailRecoverable,
   messageContentWithAttachments,
   modelOptionValue,
@@ -86,6 +87,7 @@ export interface PlaygroundContextValue {
   streamConversationId: number | null;
   isActiveConversationStreaming: boolean;
   hasRecoverableUserMessage: boolean;
+  hasOutputLimitReached: boolean;
 
   selectedModel: string;
   setSelectedModel: React.Dispatch<React.SetStateAction<string>>;
@@ -129,6 +131,7 @@ export interface PlaygroundContextValue {
   stopStreaming: () => void;
   regenerateLastResponse: () => void;
   regenerateUnfinishedResponse: () => void;
+  continueLastResponse: () => void;
   handleMessageCopy: (content: string) => void;
   showImagePreview: (images: Array<{ url: string; alt: string }>, index: number) => void;
   showNextPreviewImage: (direction: number) => void;
@@ -294,6 +297,15 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     isSubmitting,
     hasError: Boolean(error),
     lastRole: messages[messages.length - 1]?.role,
+  });
+  const lastMessage = messages[messages.length - 1];
+  const hasOutputLimitReached = isTailOutputLimited({
+    activeId,
+    isStreaming,
+    isSubmitting,
+    hasError: Boolean(error),
+    lastRole: lastMessage?.role,
+    finishReason: lastMessage?.finish_reason,
   });
   const canSubmit = Boolean(
     selectedPlatform &&
@@ -556,6 +568,8 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
               input_tokens: usage.input_tokens,
               output_tokens: usage.output_tokens,
               cost: usage.cost,
+              render_fee: usage.render_fee,
+              finish_reason: usage.finish_reason,
               ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
             });
             if (activeIdRef.current === conversationID) {
@@ -618,6 +632,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
       input_tokens: 0,
       output_tokens: 0,
       cost: 0,
+	  render_fee: 0,
       created_at: new Date().toISOString(),
     };
     const requestMessages = [...messages, localUserMessage];
@@ -716,6 +731,11 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     abortRef.current?.abort();
     finishStreaming();
   }, [finishStreaming]);
+
+  const continueLastResponse = useCallback(() => {
+    if (!hasOutputLimitReached || isStreaming) return;
+    void submitUserMessage(t('playground.continue_generation_prompt'));
+  }, [hasOutputLimitReached, isStreaming, submitUserMessage, t]);
 
   const regenerateLastResponse = useCallback(() => {
     if (!retryRequest || isStreaming) return;
@@ -994,6 +1014,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     streamConversationId,
     isActiveConversationStreaming,
     hasRecoverableUserMessage,
+    hasOutputLimitReached,
     selectedModel,
     setSelectedModel,
     selectedModelInfo,
@@ -1029,6 +1050,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     stopStreaming,
     regenerateLastResponse,
     regenerateUnfinishedResponse,
+    continueLastResponse,
     handleMessageCopy,
     showImagePreview,
     showNextPreviewImage,

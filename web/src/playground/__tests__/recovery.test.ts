@@ -2,7 +2,7 @@
 // 覆盖:重开后末位是提问才显示、发送中/流式中不误闪、有错误时让位错误条、
 // 空会话与无激活会话不显示。见 ChatView 恢复条与 PlaygroundContext 发送闸门。
 import { describe, it, expect } from 'vitest';
-import { isTailRecoverable } from '../utils';
+import { isTailOutputLimited, isTailRecoverable } from '../utils';
 
 const idle = {
   activeId: 5,
@@ -39,5 +39,32 @@ describe('isTailRecoverable — 跨会话恢复条门控', () => {
 
   it('无激活会话 → 不显示', () => {
     expect(isTailRecoverable({ ...idle, activeId: null })).toBe(false);
+  });
+});
+
+describe('isTailOutputLimited — 输出上限提示门控', () => {
+  it('末位助手消息因 length 停止且空闲 → 显示', () => {
+    expect(isTailOutputLimited({
+      activeId: 5,
+      isStreaming: false,
+      isSubmitting: false,
+      hasError: false,
+      lastRole: 'assistant',
+      finishReason: 'length',
+    })).toBe(true);
+  });
+
+  it('正常结束、仍在生成或末位不是助手 → 不显示', () => {
+    const base = {
+      activeId: 5,
+      isStreaming: false,
+      isSubmitting: false,
+      hasError: false,
+      lastRole: 'assistant',
+      finishReason: 'length',
+    };
+    expect(isTailOutputLimited({ ...base, finishReason: 'stop' })).toBe(false);
+    expect(isTailOutputLimited({ ...base, isStreaming: true })).toBe(false);
+    expect(isTailOutputLimited({ ...base, lastRole: 'user' })).toBe(false);
   });
 });

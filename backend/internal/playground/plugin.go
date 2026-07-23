@@ -23,8 +23,10 @@ type Plugin struct {
 	toolCfg *toolSettings
 	// searchProvider 测试注入口;nil 时按配置构造 Tavily。
 	searchProvider searchProvider
-	// pdf chromedp 渲染器(generate_document 用;边车不可达时降级只出 MD)。
+	// pdf chromedp 渲染器(generate_document 用;边车不可达时明确报错)。
 	pdf *pdfRenderer
+	// office 负责 DOCX/PPTX 二进制渲染；仅内部 HTTP 地址可配置。
+	office *officeRenderer
 
 	metaMu    sync.Mutex
 	metaCache map[string]modelMetaEntry
@@ -70,6 +72,9 @@ func (p *Plugin) Init(ctx sdk.PluginContext) error {
 	p.toolCfg = &toolCfg
 	if toolCfg.GenerateDocumentEnabled {
 		p.pdf = newPDFRenderer(toolCfg.ChromiumCDPURL)
+	}
+	if toolCfg.GenerateOfficeEnabled {
+		p.office = newOfficeRenderer(toolCfg.OfficeRendererURL)
 	}
 
 	type dsnCandidate struct {

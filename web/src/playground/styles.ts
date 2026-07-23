@@ -990,6 +990,7 @@ export const styles: Record<string, CSSProperties> = {
   messageMeta: {
     display: 'flex',
     alignItems: 'center',
+	flexWrap: 'wrap',
     gap: 6,
     marginTop: 8,
     fontSize: 11,

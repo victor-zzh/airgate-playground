@@ -119,8 +119,9 @@ func (s *fakeHostStream) Recv() (*sdk.HostStreamFrame, error) {
 }
 
 type fakeHost struct {
-	bodies  [][]byte
-	respond func(call int, body []byte) []sdk.HostStreamFrame
+	bodies   [][]byte
+	payloads []map[string]any
+	respond  func(call int, body []byte) []sdk.HostStreamFrame
 }
 
 func (h *fakeHost) Invoke(context.Context, sdk.HostInvokeRequest) (*sdk.HostInvokeResponse, error) {
@@ -130,6 +131,7 @@ func (h *fakeHost) Invoke(context.Context, sdk.HostInvokeRequest) (*sdk.HostInvo
 func (h *fakeHost) InvokeStream(_ context.Context, req sdk.HostStreamRequest) (sdk.HostStream, error) {
 	body, _ := req.Payload["body"].(string)
 	h.bodies = append(h.bodies, []byte(body))
+	h.payloads = append(h.payloads, req.Payload)
 	return &fakeHostStream{frames: h.respond(len(h.bodies), []byte(body))}, nil
 }
 
@@ -160,6 +162,22 @@ func (s *staticSearchProvider) Name() string { return "static" }
 func (s *staticSearchProvider) Search(context.Context, string, searchOptions) (*searchResponse, error) {
 	s.calls++
 	return &searchResponse{Results: []searchResult{{Title: "T1", URL: "https://example.com", Snippet: "snip", Content: "full content"}}}, nil
+}
+
+type terminalTestTool struct{}
+
+func (terminalTestTool) Name() string        { return "generate_test_file" }
+func (terminalTestTool) Description() string { return "Generate a test file and finish." }
+func (terminalTestTool) InputSchema() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false}
+}
+func (terminalTestTool) Execute(context.Context, *toolContext, json.RawMessage) (*toolOutcome, error) {
+	return &toolOutcome{
+		ForModel:        "file generated",
+		ForClient:       map[string]any{"file": map[string]any{"name": "test.pdf"}},
+		Terminal:        true,
+		TerminalMessage: "文件已生成，可通过文件卡下载。",
+	}, nil
 }
 
 func newLoopTestPlugin(host sdk.Host, provider searchProvider) *Plugin {
@@ -246,6 +264,73 @@ func TestClaudeToolLoopSearchThenAnswer(t *testing.T) {
 	// usage 聚合:两轮 0.01 → 0.02
 	if !strings.Contains(out, `"user_cost":0.02`) {
 		t.Fatalf("aggregated usage missing: %s", out)
+	}
+}
+
+func TestClaudeToolLoopReportsOutputLimit(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{}
+	host.respond = func(_ int, _ []byte) []sdk.HostStreamFrame {
+		return sseDataFrames(
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"未完成内容"}}`,
+			`{"type":"message_delta","delta":{"stop_reason":"max_tokens"}}`,
+		)
+	}
+	p := newLoopTestPlugin(host, nil)
+	body := []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"写长文"}],"stream":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/chat/completions", nil)
+	req.Header.Set(headerUserID, "7")
+	rec := httptest.NewRecorder()
+	var parsed openAIChatRequest
+	_ = json.Unmarshal(body, &parsed)
+
+	p.runToolLoop(req.Context(), rec, req, "claude", parsed, body, defaultCompileOpts(), p.enabledChatTools(), slog.Default())
+
+	out := rec.Body.String()
+	for _, want := range []string{`"finish_reason":"length"`, `"stop_reason":"max_tokens"`, "data: [DONE]"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestClaudeTerminalToolSkipsSecondModelCall(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{}
+	host.respond = func(call int, _ []byte) []sdk.HostStreamFrame {
+		if call != 1 {
+			t.Fatalf("unexpected upstream call %d", call)
+		}
+		return sseDataFrames(
+			`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_file","name":"generate_test_file"}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}`,
+			`{"type":"message_delta","delta":{"stop_reason":"tool_use"}}`,
+		)
+	}
+	p := newLoopTestPlugin(host, nil)
+	body := []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"生成文件"}],"stream":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/chat/completions", nil)
+	req.Header.Set(headerUserID, "7")
+	rec := httptest.NewRecorder()
+	var parsed openAIChatRequest
+	_ = json.Unmarshal(body, &parsed)
+
+	p.runToolLoop(req.Context(), rec, req, "claude", parsed, body, defaultCompileOpts(), []chatTool{terminalTestTool{}}, slog.Default())
+
+	if len(host.bodies) != 1 {
+		t.Fatalf("upstream calls = %d, want 1", len(host.bodies))
+	}
+	if host.payloads[0]["trace_id"] == "" || !strings.HasSuffix(host.payloads[0]["request_id"].(string), ":1") {
+		t.Fatalf("terminal usage trace missing: %+v", host.payloads[0])
+	}
+	out := rec.Body.String()
+	for _, want := range []string{`"tool_call_finished"`, `"name":"test.pdf"`, "文件已生成", `"iterations":1`, "data: [DONE]"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `"user_cost":0.02`) || !strings.Contains(out, `"user_cost":0.01`) {
+		t.Fatalf("terminal tool must aggregate one model usage only: %s", out)
 	}
 }
 
@@ -338,6 +423,125 @@ func TestOpenAIToolLoopSearchThenAnswer(t *testing.T) {
 			t.Fatalf("output missing %q:\n%s", want, out)
 		}
 	}
+}
+
+func TestOpenAITerminalToolSkipsSecondModelCall(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{}
+	host.respond = func(call int, _ []byte) []sdk.HostStreamFrame {
+		if call != 1 {
+			t.Fatalf("unexpected upstream call %d", call)
+		}
+		return sseDataFrames(
+			`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_file","type":"function","function":{"name":"generate_test_file","arguments":"{}"}}]}}]}`,
+			`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		)
+	}
+	p := newLoopTestPlugin(host, nil)
+	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"生成文件"}],"stream":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/chat/completions", nil)
+	req.Header.Set(headerUserID, "7")
+	rec := httptest.NewRecorder()
+	var parsed openAIChatRequest
+	_ = json.Unmarshal(body, &parsed)
+
+	p.runToolLoop(req.Context(), rec, req, "openai", parsed, body, defaultCompileOpts(), []chatTool{terminalTestTool{}}, slog.Default())
+
+	if len(host.bodies) != 1 {
+		t.Fatalf("upstream calls = %d, want 1", len(host.bodies))
+	}
+	out := rec.Body.String()
+	for _, want := range []string{`"tool_call_finished"`, `"name":"test.pdf"`, "文件已生成", `"iterations":1`, "data: [DONE]"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `"user_cost":0.02`) || !strings.Contains(out, `"user_cost":0.01`) {
+		t.Fatalf("terminal tool must aggregate one model usage only: %s", out)
+	}
+}
+
+func TestMergeUsageAggregatesTokenMetricsAndCostDetails(t *testing.T) {
+	t.Parallel()
+	usage := mergeUsage(nil, &sdk.Usage{
+		Model: "m", AccountCost: 0.3, UserCost: 0.4, BillingMultiplier: 2,
+		Metrics:     []sdk.UsageMetric{{Key: "input_tokens", Kind: "token", Value: 10, AccountCost: 0.1}},
+		CostDetails: []sdk.UsageCostDetail{{Key: "input_tokens", AccountCost: 0.1, UserCost: 0.2}},
+	})
+	usage = mergeUsage(usage, &sdk.Usage{
+		Model: "m", AccountCost: 0.5, UserCost: 0.6, BillingMultiplier: 2,
+		Metrics: []sdk.UsageMetric{
+			{Key: "input_tokens", Kind: "token", Value: 5, AccountCost: 0.05},
+			{Key: "output_tokens", Kind: "token", Value: 3, AccountCost: 0.45},
+			{Key: "cache_creation_input_tokens", Kind: "token", Value: 7, AccountCost: 0.02},
+			{Key: "cache_read_input_tokens", Kind: "token", Value: 11, AccountCost: 0.01},
+		},
+		CostDetails: []sdk.UsageCostDetail{
+			{Key: "output_tokens", AccountCost: 0.45, UserCost: 0.6},
+			{Key: "cache_creation", AccountCost: 0.02, UserCost: 0.04},
+			{Key: "cache_read", AccountCost: 0.01, UserCost: 0.02},
+		},
+	})
+	if usage.AccountCost != 0.8 || usage.UserCost != 1 {
+		t.Fatalf("aggregated costs = %v/%v, want 0.8/1", usage.AccountCost, usage.UserCost)
+	}
+	if len(usage.Metrics) != 4 || usage.Metrics[0].Value != 15 || usage.Metrics[1].Value != 3 || usage.Metrics[2].Value != 7 || usage.Metrics[3].Value != 11 {
+		t.Fatalf("aggregated metrics = %+v", usage.Metrics)
+	}
+	if len(usage.CostDetails) != 4 {
+		t.Fatalf("cost details count = %d, want 4", len(usage.CostDetails))
+	}
+}
+
+func TestMergeUsageKeepsModelTokensSeparateFromRenderUsage(t *testing.T) {
+	t.Parallel()
+	usage := mergeUsage(nil, &sdk.Usage{
+		Model: "claude-sonnet-5", UserCost: 0.12,
+		Metrics: []sdk.UsageMetric{
+			{Key: "input_tokens", Kind: "token", Value: 1200},
+			{Key: "output_tokens", Kind: "token", Value: 400},
+		},
+	})
+	usage = mergeUsage(usage, &sdk.Usage{
+		Model: "document-render-pdf", UserCost: 0.03,
+		Metrics:     []sdk.UsageMetric{{Key: "document_render", Kind: "custom", Value: 1}},
+		CostDetails: []sdk.UsageCostDetail{{Key: "document_render", UserCost: 0.03}},
+	})
+	if usage.Model != "claude-sonnet-5" {
+		t.Fatalf("render usage replaced model identity: %q", usage.Model)
+	}
+	if usage.UserCost != 0.15 {
+		t.Fatalf("total cost = %v, want 0.15", usage.UserCost)
+	}
+	values := map[string]float64{}
+	for _, metric := range usage.Metrics {
+		values[metric.Key] = metric.Value
+	}
+	if values["input_tokens"] != 1200 || values["output_tokens"] != 400 || values["document_render"] != 1 {
+		t.Fatalf("metrics mixed or lost: %+v", values)
+	}
+}
+
+func TestFileToolDeclarationPayloadStaysBounded(t *testing.T) {
+	t.Parallel()
+	tools := []chatTool{
+		&generateDocumentTool{formats: []string{"pdf", "docx"}},
+		&generateSpreadsheetTool{},
+		&generatePresentationTool{},
+	}
+	claudePayload, err := json.Marshal(claudeToolDeclarations(tools))
+	if err != nil {
+		t.Fatal(err)
+	}
+	openAIPayload, err := json.Marshal(openAIToolDeclarations(tools))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const maxDeclarationBytes = 16 << 10
+	if len(claudePayload) > maxDeclarationBytes || len(openAIPayload) > maxDeclarationBytes {
+		t.Fatalf("file tool declarations grew unexpectedly: claude=%d openai=%d limit=%d", len(claudePayload), len(openAIPayload), maxDeclarationBytes)
+	}
+	t.Logf("file tool declaration bytes: claude=%d openai=%d", len(claudePayload), len(openAIPayload))
 }
 
 // ── Tavily / web_search 工具 ─────────────────────────────────────────────────

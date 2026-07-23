@@ -32,6 +32,8 @@ type Message struct {
 	InputTokens     int     `json:"input_tokens,omitempty"`
 	OutputTokens    int     `json:"output_tokens,omitempty"`
 	Cost            float64 `json:"cost,omitempty"`
+	RenderFee       float64 `json:"render_fee"`
+	FinishReason    string  `json:"finish_reason,omitempty"`
 	// ToolCalls 工具循环时间线(JSON 数组,历史会话重建工具卡片用)。
 	ToolCalls json.RawMessage `json:"tool_calls,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
@@ -89,12 +91,15 @@ func migrate(db *sql.DB) error {
 			input_tokens    INTEGER NOT NULL DEFAULT 0,
 			output_tokens   INTEGER NOT NULL DEFAULT 0,
 			cost            DOUBLE PRECISION NOT NULL DEFAULT 0,
+			render_fee      DOUBLE PRECISION NOT NULL DEFAULT 0,
 			created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 
 		ALTER TABLE playground_messages ADD COLUMN IF NOT EXISTS reasoning TEXT NOT NULL DEFAULT '';
 		ALTER TABLE playground_messages ADD COLUMN IF NOT EXISTS reasoning_effort TEXT NOT NULL DEFAULT '';
 		ALTER TABLE playground_messages ADD COLUMN IF NOT EXISTS tool_calls JSONB NOT NULL DEFAULT '[]';
+		ALTER TABLE playground_messages ADD COLUMN IF NOT EXISTS finish_reason TEXT NOT NULL DEFAULT '';
+		ALTER TABLE playground_messages ADD COLUMN IF NOT EXISTS render_fee DOUBLE PRECISION NOT NULL DEFAULT 0;
 
 		CREATE INDEX IF NOT EXISTS idx_playground_msg_conv ON playground_messages(conversation_id, created_at);
 

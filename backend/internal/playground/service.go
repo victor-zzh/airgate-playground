@@ -1,12 +1,14 @@
 package playground
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
 	"strings"
 
@@ -19,6 +21,16 @@ type Service struct {
 	host                    sdk.Host
 	storage                 *ObjectStorage
 	maxConversationsPerUser int
+}
+
+func clampRenderFee(totalCost, renderFee float64) float64 {
+	if math.IsNaN(renderFee) || math.IsInf(renderFee, 0) || renderFee <= 0 || totalCost <= 0 {
+		return 0
+	}
+	if renderFee > totalCost {
+		return totalCost
+	}
+	return renderFee
 }
 
 func NewService(logger *slog.Logger, db *sql.DB, host sdk.Host, storage *ObjectStorage, maxConversationsPerUser int) *Service {
@@ -165,7 +177,7 @@ func (s *Service) ListMessages(ctx context.Context, userID int, convID int64) ([
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, conversation_id, role, content, reasoning, reasoning_effort, platform, model, group_id, input_tokens, output_tokens, cost, tool_calls, created_at
+		`SELECT id, conversation_id, role, content, reasoning, reasoning_effort, platform, model, group_id, input_tokens, output_tokens, cost, render_fee, finish_reason, tool_calls, created_at
 		 FROM playground_messages
 		 WHERE conversation_id = $1
 		 ORDER BY created_at`, convID,
@@ -179,11 +191,16 @@ func (s *Service) ListMessages(ctx context.Context, userID int, convID int64) ([
 	for rows.Next() {
 		var m Message
 		var toolCalls []byte
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.Reasoning, &m.ReasoningEffort, &m.Platform, &m.Model, &m.GroupID, &m.InputTokens, &m.OutputTokens, &m.Cost, &toolCalls, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.Reasoning, &m.ReasoningEffort, &m.Platform, &m.Model, &m.GroupID, &m.InputTokens, &m.OutputTokens, &m.Cost, &m.RenderFee, &m.FinishReason, &toolCalls, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		if len(toolCalls) > 0 && string(toolCalls) != "[]" {
 			m.ToolCalls = json.RawMessage(toolCalls)
+			if resolved, err := s.resolveToolCallAssetURLs(ctx, userID, m.ToolCalls); err != nil {
+				s.logger.Warn("failed to resolve tool call assets", "error", err, "message_id", m.ID)
+			} else {
+				m.ToolCalls = resolved
+			}
 		}
 		if resolved, err := s.resolveAssetURLs(ctx, userID, m.Content); err != nil {
 			s.logger.Warn("failed to resolve message assets", "error", err, "message_id", m.ID)
@@ -195,7 +212,41 @@ func (s *Service) ListMessages(ctx context.Context, userID int, convID int64) ([
 	return msgs, rows.Err()
 }
 
-func (s *Service) saveMessage(ctx context.Context, convID int64, role, content, reasoning, reasoningEffort, platform, model string, groupID int64, inputTokens, outputTokens int, cost float64, toolCalls json.RawMessage) (*Message, error) {
+// GetMessageForExport loads one message after verifying the conversation owner.
+// The returned content keeps stable asset URIs; export renderers treat them as
+// inert text rather than trusting user-supplied URLs.
+func (s *Service) GetMessageForExport(ctx context.Context, userID int, messageID int64) (*Message, *Conversation, error) {
+	if messageID <= 0 {
+		return nil, nil, fmt.Errorf("message_id required")
+	}
+	var msg Message
+	var conv Conversation
+	var toolCalls []byte
+	err := s.db.QueryRowContext(ctx,
+		`SELECT m.id, m.conversation_id, m.role, m.content, m.reasoning, m.reasoning_effort,
+		        m.platform, m.model, m.group_id, m.input_tokens, m.output_tokens, m.cost, m.render_fee, m.finish_reason,
+		        m.tool_calls, m.created_at,
+		        c.id, c.user_id, c.title, c.group_id, c.platform, c.model, c.created_at, c.updated_at
+		 FROM playground_messages m
+		 JOIN playground_conversations c ON c.id = m.conversation_id
+		 WHERE m.id = $1 AND c.user_id = $2`, messageID, userID,
+	).Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.Reasoning, &msg.ReasoningEffort,
+		&msg.Platform, &msg.Model, &msg.GroupID, &msg.InputTokens, &msg.OutputTokens, &msg.Cost, &msg.RenderFee, &msg.FinishReason,
+		&toolCalls, &msg.CreatedAt,
+		&conv.ID, &conv.UserID, &conv.Title, &conv.GroupID, &conv.Platform, &conv.Model, &conv.CreatedAt, &conv.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil, fmt.Errorf("message not found")
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(toolCalls) > 0 && string(toolCalls) != "[]" {
+		msg.ToolCalls = json.RawMessage(toolCalls)
+	}
+	return &msg, &conv, nil
+}
+
+func (s *Service) saveMessage(ctx context.Context, convID int64, role, content, reasoning, reasoningEffort, platform, model, finishReason string, groupID int64, inputTokens, outputTokens int, cost, renderFee float64, toolCalls json.RawMessage) (*Message, error) {
 	toolCallsValue := "[]"
 	if len(toolCalls) > 0 {
 		toolCallsValue = string(toolCalls)
@@ -212,13 +263,15 @@ func (s *Service) saveMessage(ctx context.Context, convID int64, role, content, 
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,
 		Cost:            cost,
+		RenderFee:       renderFee,
+		FinishReason:    finishReason,
 		ToolCalls:       toolCalls,
 	}
 	err := s.db.QueryRowContext(ctx,
-		`INSERT INTO playground_messages (conversation_id, role, content, reasoning, reasoning_effort, platform, model, group_id, input_tokens, output_tokens, cost, tool_calls)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		`INSERT INTO playground_messages (conversation_id, role, content, reasoning, reasoning_effort, platform, model, finish_reason, group_id, input_tokens, output_tokens, cost, render_fee, tool_calls)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		 RETURNING id, created_at`,
-		convID, role, content, reasoning, reasoningEffort, platform, model, groupID, inputTokens, outputTokens, cost, toolCallsValue,
+		convID, role, content, reasoning, reasoningEffort, platform, model, finishReason, groupID, inputTokens, outputTokens, cost, renderFee, toolCallsValue,
 	).Scan(&m.ID, &m.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -242,6 +295,8 @@ type PersistMessageRequest struct {
 	InputTokens     int     `json:"input_tokens"`
 	OutputTokens    int     `json:"output_tokens"`
 	Cost            float64 `json:"cost"`
+	RenderFee       float64 `json:"render_fee"`
+	FinishReason    string  `json:"finish_reason"`
 	// ToolCalls 工具循环时间线(前端把 SSE 收到的事件原样回传,≤64KB JSON 数组)。
 	ToolCalls json.RawMessage `json:"tool_calls,omitempty"`
 }
@@ -253,6 +308,7 @@ type UpdateMessageRequest struct {
 	InputTokens  int     `json:"input_tokens"`
 	OutputTokens int     `json:"output_tokens"`
 	Cost         float64 `json:"cost"`
+	RenderFee    float64 `json:"render_fee"`
 }
 
 func (s *Service) UpdateMessage(ctx context.Context, userID int, msgID int64, req UpdateMessageRequest) (*Message, error) {
@@ -263,11 +319,11 @@ func (s *Service) UpdateMessage(ctx context.Context, userID int, msgID int64, re
 	var msg Message
 	var convUserID int
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT m.id, m.conversation_id, m.role, m.content, m.reasoning, m.reasoning_effort, m.platform, m.model, m.group_id, m.input_tokens, m.output_tokens, m.cost, m.created_at, c.user_id
+		`SELECT m.id, m.conversation_id, m.role, m.content, m.reasoning, m.reasoning_effort, m.platform, m.model, m.group_id, m.input_tokens, m.output_tokens, m.cost, m.render_fee, m.finish_reason, m.created_at, c.user_id
 		 FROM playground_messages m
 		 JOIN playground_conversations c ON c.id = m.conversation_id
 		 WHERE m.id = $1`, msgID,
-	).Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.Reasoning, &msg.ReasoningEffort, &msg.Platform, &msg.Model, &msg.GroupID, &msg.InputTokens, &msg.OutputTokens, &msg.Cost, &msg.CreatedAt, &convUserID); err != nil {
+	).Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.Reasoning, &msg.ReasoningEffort, &msg.Platform, &msg.Model, &msg.GroupID, &msg.InputTokens, &msg.OutputTokens, &msg.Cost, &msg.RenderFee, &msg.FinishReason, &msg.CreatedAt, &convUserID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("message not found")
 		}
@@ -285,12 +341,14 @@ func (s *Service) UpdateMessage(ctx context.Context, userID int, msgID int64, re
 	msg.InputTokens += req.InputTokens
 	msg.OutputTokens += req.OutputTokens
 	msg.Cost += req.Cost
+	msg.RenderFee += req.RenderFee
+	msg.RenderFee = clampRenderFee(msg.Cost, msg.RenderFee)
 
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE playground_messages
-		 SET content = $1, input_tokens = $2, output_tokens = $3, cost = $4
-		 WHERE id = $5`,
-		msg.Content, msg.InputTokens, msg.OutputTokens, msg.Cost, msg.ID,
+		 SET content = $1, input_tokens = $2, output_tokens = $3, cost = $4, render_fee = $5
+		 WHERE id = $6`,
+		msg.Content, msg.InputTokens, msg.OutputTokens, msg.Cost, msg.RenderFee, msg.ID,
 	); err != nil {
 		return nil, fmt.Errorf("update message: %w", err)
 	}
@@ -348,7 +406,8 @@ func (s *Service) PersistMessage(ctx context.Context, userID int, req PersistMes
 		}
 	}
 
-	msg, err := s.saveMessage(ctx, conv.ID, req.Role, content, req.Reasoning, req.ReasoningEffort, platform, model, groupID, req.InputTokens, req.OutputTokens, req.Cost, toolCalls)
+	renderFee := clampRenderFee(req.Cost, req.RenderFee)
+	msg, err := s.saveMessage(ctx, conv.ID, req.Role, content, req.Reasoning, req.ReasoningEffort, platform, model, req.FinishReason, groupID, req.InputTokens, req.OutputTokens, req.Cost, renderFee, toolCalls)
 	if err != nil {
 		return nil, fmt.Errorf("save message: %w", err)
 	}
@@ -356,6 +415,13 @@ func (s *Service) PersistMessage(ctx context.Context, userID int, req PersistMes
 		s.logger.Warn("failed to resolve persisted message assets", "error", err, "message_id", msg.ID)
 	} else {
 		msg.Content = resolved
+	}
+	if len(msg.ToolCalls) > 0 {
+		if resolved, err := s.resolveToolCallAssetURLs(ctx, userID, msg.ToolCalls); err != nil {
+			s.logger.Warn("failed to resolve persisted tool call assets", "error", err, "message_id", msg.ID)
+		} else {
+			msg.ToolCalls = resolved
+		}
 	}
 
 	if conv.Title == "" && req.Role == "assistant" {
@@ -381,6 +447,29 @@ func (s *Service) Storage() *ObjectStorage {
 // 纳入孤儿清理与会话删除链路)。
 func (s *Service) RegisterConversationAsset(ctx context.Context, userID int, convID int64, asset *StoredAsset) error {
 	return s.insertAsset(ctx, userID, convID, asset)
+}
+
+// RemoveConversationAsset removes both the persisted ownership row and the
+// backing object. It is used when a post-render side effect (such as a strict
+// usage charge) fails after the asset was already registered.
+func (s *Service) RemoveConversationAsset(ctx context.Context, userID int, convID int64, asset *StoredAsset) error {
+	if asset == nil || asset.ID == "" {
+		return fmt.Errorf("asset required")
+	}
+	// Remove the backing object first. If storage is temporarily unavailable,
+	// keep the ownership row so a later cleanup/retry still has the object key.
+	if s.storage != nil && asset.ObjectKey != "" {
+		if err := s.storage.Delete(ctx, asset.ObjectKey); err != nil {
+			return err
+		}
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM playground_assets WHERE id = $1 AND user_id = $2 AND conversation_id = $3`,
+		asset.ID, userID, convID,
+	); err != nil {
+		return err
+	}
+	return nil
 }
 
 // InsertToolCallAudit 工具执行审计入库(调用方负责失败降级)。
@@ -575,6 +664,63 @@ func (s *Service) resolveAssetURLs(ctx context.Context, userID int, content stri
 		}
 		return publicURL
 	})
+	return resolved, firstErr
+}
+
+// resolveToolCallAssetURLs refreshes expiring download URLs in persisted file
+// cards. The database keeps asset_uri as the stable reference; src is replaced
+// only in the API response after verifying that the asset belongs to the user.
+func (s *Service) resolveToolCallAssetURLs(ctx context.Context, userID int, toolCalls json.RawMessage) (json.RawMessage, error) {
+	if s.storage == nil || !bytes.Contains(toolCalls, []byte("airgate-asset://")) {
+		return toolCalls, nil
+	}
+	return refreshToolCallAssetURLs(toolCalls, func(raw string) (string, error) {
+		id, ok := parseAssetURI(raw)
+		if !ok {
+			return "", fmt.Errorf("invalid tool call asset URI")
+		}
+		asset, err := s.getAsset(ctx, userID, id)
+		if err != nil {
+			return "", err
+		}
+		return s.storage.PublicURL(ctx, asset.ObjectKey)
+	})
+}
+
+func refreshToolCallAssetURLs(toolCalls json.RawMessage, resolve func(string) (string, error)) (json.RawMessage, error) {
+	var value any
+	if err := json.Unmarshal(toolCalls, &value); err != nil {
+		return toolCalls, err
+	}
+	var firstErr error
+	var visit func(any)
+	visit = func(node any) {
+		switch current := node.(type) {
+		case map[string]any:
+			if raw, ok := current["asset_uri"].(string); ok && strings.HasPrefix(raw, "airgate-asset://") {
+				publicURL, err := resolve(raw)
+				if err != nil {
+					if firstErr == nil {
+						firstErr = err
+					}
+				} else {
+					current["src"] = publicURL
+				}
+			}
+			for _, child := range current {
+				visit(child)
+			}
+		case []any:
+			for _, child := range current {
+				visit(child)
+			}
+		}
+	}
+	visit(value)
+	resolved, err := json.Marshal(value)
+	if err != nil {
+		return toolCalls, err
+	}
 	return resolved, firstErr
 }
 

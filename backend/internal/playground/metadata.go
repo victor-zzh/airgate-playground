@@ -82,7 +82,29 @@ func BuildPluginInfo() sdk.PluginInfo {
 				Label:       "文档生成工具",
 				Type:        "bool",
 				Default:     "false",
-				Description: "开启后模型可生成 Markdown/PDF 文档交付给用户（PDF 需要 chromium 边车容器在位，不可达时自动降级只出 Markdown）。",
+				Description: "开启后模型可生成真实 Markdown/PDF 文档交付给用户。PDF 需要 chromium 边车；不可达时会明确报错，不会用 Markdown 冒充 PDF。",
+			},
+			{
+				Key:         "generate_spreadsheet_enabled",
+				Label:       "Excel 表格生成工具",
+				Type:        "bool",
+				Default:     "false",
+				Description: "开启后模型可通过受控结构生成 XLSX 文件。使用 Excelize 本地渲染，不额外消耗模型 token；首版渲染服务费默认为 0。",
+			},
+			{
+				Key:         "generate_office_enabled",
+				Label:       "Word / PPT 生成工具",
+				Type:        "bool",
+				Default:     "false",
+				Description: "开启后模型可生成真实 DOCX 与 PPTX 文件。需要内部 office-renderer 边车；渲染本身不额外消耗模型 token。",
+			},
+			{
+				Key:         "office_renderer_url",
+				Label:       "Office renderer 地址",
+				Type:        "string",
+				Default:     "http://office-renderer:8787",
+				Description: "DOCX/PPTX 内部渲染服务地址，不应暴露公网。",
+				Placeholder: "http://office-renderer:8787",
 			},
 			{
 				Key:         "chromium_cdp_url",
@@ -91,6 +113,34 @@ func BuildPluginInfo() sdk.PluginInfo {
 				Default:     "http://chromium:9222",
 				Description: "headless-shell 边车的 DevTools 端点（compose 服务名+端口，须在 internal 网络内）。",
 				Placeholder: "http://chromium:9222",
+			},
+			{
+				Key:         "pdf_render_fee",
+				Label:       "PDF 渲染费",
+				Type:        "float",
+				Default:     "0",
+				Description: "每个成功生成的 PDF 文件费用；0 表示免费灰度。该费用独立于模型 token 计费。",
+			},
+			{
+				Key:         "docx_render_fee",
+				Label:       "Word 渲染费",
+				Type:        "float",
+				Default:     "0",
+				Description: "每个成功生成的 DOCX 文件费用；0 表示免费灰度。",
+			},
+			{
+				Key:         "pptx_render_fee",
+				Label:       "PowerPoint 渲染费",
+				Type:        "float",
+				Default:     "0",
+				Description: "每个成功生成的 PPTX 文件费用；0 表示免费灰度。",
+			},
+			{
+				Key:         "xlsx_render_fee",
+				Label:       "Excel 渲染费",
+				Type:        "float",
+				Default:     "0",
+				Description: "每个成功生成的 XLSX 文件费用；0 表示免费灰度。",
 			},
 		},
 		Capabilities: []sdk.Capability{
@@ -101,6 +151,7 @@ func BuildPluginInfo() sdk.PluginInfo {
 			sdk.CapabilityForHostMethod(hostMethodAssetsGetURL),
 			sdk.CapabilityForHostMethod(hostMethodAssetsGetBytes),
 			sdk.CapabilityForHostMethod(hostMethodAssetsDelete),
+			sdk.CapabilityForHostMethod(hostMethodUsageRecord),
 		},
 		FrontendPages: []sdk.FrontendPage{
 			{

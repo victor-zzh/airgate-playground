@@ -16,7 +16,7 @@ import (
 
 // ── PDF 渲染(chromedp → headless-shell 边车) ────────────────────────────────
 // 边车跑在 compose 的 internal 网络(无外网出口),配合禁 JS + 白名单清洗后的
-// HTML,构成三层防护。边车不可用时调用方降级只出 Markdown。
+// HTML,构成三层防护。边车不可用时调用方明确返回 PDF 生成错误。
 
 type pdfRenderer struct {
 	cdpURL  string
@@ -40,9 +40,9 @@ func newPDFRenderer(cdpURL string) *pdfRenderer {
 //
 // 新版 Chrome 对 DevTools 的 /json HTTP 端点做 DNS-rebinding 防护:Host 头只放行
 // IP 与 localhost 字面量,用服务名(如 http://chromium:9222)访问会被 500 拒,导致
-// 健康探测误判"不可达"而降级只出 Markdown。改用 IP 访问则 /json 与后续 wsUrl 全程
+// 健康探测误判"不可达"。改用 IP 访问则 /json 与后续 wsUrl 全程
 // 不撞校验。每次调用重新解析,边车容器重建换 IP 也能跟上;已是 IP/localhost 或解析
-// 失败时原样返回(后续探测/连接自然失败并降级)。
+// 失败时原样返回(后续探测/连接自然失败并返回错误)。
 func (r *pdfRenderer) resolveCDPURL(ctx context.Context) string {
 	u, err := url.Parse(r.cdpURL)
 	if err != nil {
@@ -66,7 +66,7 @@ func (r *pdfRenderer) resolveCDPURL(ctx context.Context) string {
 	return u.String()
 }
 
-// Healthy 探测边车 CDP 端点是否可达(短超时,失败即降级)。
+// Healthy 探测边车 CDP 端点是否可达(短超时,失败即返回错误)。
 func (r *pdfRenderer) Healthy(ctx context.Context) bool {
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()

@@ -517,10 +517,7 @@ func normalizeClaudeMessageResponse(body []byte) ([]byte, error) {
 	if id == "" {
 		id = "chatcmpl-playground"
 	}
-	finishReason := resp.StopReason
-	if finishReason == "" {
-		finishReason = "stop"
-	}
+	finishReason := normalizeFinishReason(resp.StopReason)
 	out := map[string]any{
 		"id":      id,
 		"object":  "chat.completion",
@@ -532,6 +529,9 @@ func normalizeClaudeMessageResponse(body []byte) ([]byte, error) {
 			"total_tokens":      resp.Usage.InputTokens + resp.Usage.OutputTokens,
 		},
 	}
+	if resp.StopReason != "" {
+		out["airgate"] = map[string]any{"stop_reason": resp.StopReason}
+	}
 	encoded, err := json.Marshal(out)
 	if err != nil {
 		return body, nil
@@ -540,9 +540,10 @@ func normalizeClaudeMessageResponse(body []byte) ([]byte, error) {
 }
 
 type claudeSSEBridge struct {
-	w     io.Writer
-	model string
-	buf   string
+	w              io.Writer
+	model          string
+	buf            string
+	suppressFinish bool
 	// onEvent 每个解析成功的上游事件回调(工具循环的累积器挂在这里)。
 	onEvent func(map[string]any)
 }
@@ -617,6 +618,13 @@ func (b *claudeSSEBridge) handleEvent(event string) error {
 			if usage, ok := data["usage"]; ok {
 				if err := writeOpenAIUsage(b.w, usage, b.model); err != nil {
 					return err
+				}
+			}
+			if delta, ok := data["delta"].(map[string]any); ok {
+				if stopReason, _ := delta["stop_reason"].(string); stopReason != "" && !b.suppressFinish {
+					if err := writeChatFinishChunk(b.w, b.model, stopReason, stopReason); err != nil {
+						return err
+					}
 				}
 			}
 		}

@@ -196,7 +196,11 @@ function FileBlockChip({ block }: { block: ParsedFileBlock }) {
         </svg>
         <span style={fileBlockChipStyles.name} title={block.name}>{block.name}</span>
         {sizeLabel && <span style={fileBlockChipStyles.meta}>{sizeLabel}</span>}
-        {block.truncated && <span style={fileBlockChipStyles.badge}>{t('playground.attachment_truncated_badge')}</span>}
+        {block.truncated && (
+          <span style={fileBlockChipStyles.badge} title={t('playground.attachment.truncated')}>
+            {t('playground.attachment_truncated_badge')}
+          </span>
+        )}
       </summary>
       {open && <div style={fileBlockChipStyles.content}>{block.content}</div>}
     </details>

@@ -12,10 +12,12 @@ export function ChatView() {
     error,
     retryRequest,
     hasRecoverableUserMessage,
+    hasOutputLimitReached,
     interactionNotice,
     createConversation,
     regenerateLastResponse,
     regenerateUnfinishedResponse,
+    continueLastResponse,
     isDraggingFiles,
   } = usePlayground();
 
@@ -50,6 +52,20 @@ export function ChatView() {
               <path d="M5 22v-4h4" />
             </svg>
             {t('playground.regenerate')}
+          </button>
+        </div>
+      )}
+
+      {hasOutputLimitReached && (
+        <div style={{ ...styles.errorBar, ...(isMobile ? styles.errorBarMobile : null) }} role="status">
+          <span style={styles.errorMessage}>{t('playground.output_limit_reached')}</span>
+          <button
+            type="button"
+            className="pg-error-retry"
+            style={styles.errorRetryBtn}
+            onClick={continueLastResponse}
+          >
+            {t('playground.continue_generation')}
           </button>
         </div>
       )}

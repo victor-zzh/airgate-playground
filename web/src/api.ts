@@ -91,6 +91,8 @@ export interface Message {
   input_tokens: number;
   output_tokens: number;
   cost: number;
+  render_fee: number;
+  finish_reason?: string;
   tool_calls?: PersistedToolCall[];
   created_at: string;
 }
@@ -119,6 +121,8 @@ export interface PersistedMessageRequest {
   input_tokens?: number;
   output_tokens?: number;
   cost?: number;
+  render_fee?: number;
+  finish_reason?: string;
   tool_calls?: PersistedToolCall[];
 }
 
@@ -143,7 +147,7 @@ export interface ChatCompletionCallbacks {
   onData: (text: string) => void;
   onReasoning: (text: string) => void;
   onToolEvent?: (event: 'tool_call_started' | 'tool_call_finished', iteration: number, call: ToolEventCall) => void;
-  onDone: (usage: { input_tokens: number; output_tokens: number; model: string; cost: number }) => void | Promise<void>;
+  onDone: (result: { input_tokens: number; output_tokens: number; model: string; cost: number; model_cost: number; render_fee: number; finish_reason: string; stop_reason: string }) => void | Promise<void>;
   onError: (err: string) => void;
 }
 
@@ -173,6 +177,12 @@ export const api = {
   listMessages: (convId: number) => request<Message[]>('GET', `/messages/${convId}`),
 
   persistMessage: (data: PersistedMessageRequest) => request<Message>('POST', '/messages', data),
+
+  exportMessage: (messageID: number, format: 'pdf' | 'docx' | 'pptx' | 'xlsx') =>
+    request<{ file: { name: string; content_type: string; size: number; src: string }; model_tokens: number; render_fee: number }>('POST', '/exports', {
+      message_id: messageID,
+      format,
+    }),
 
   getUserInfo: () => request<UserInfo>('GET', '/user/info'),
 };
@@ -228,7 +238,9 @@ export async function chatCompletionsStream(
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  let usage = { input_tokens: 0, output_tokens: 0, model: body.model, cost: 0 };
+  let usage = { input_tokens: 0, output_tokens: 0, model: body.model, cost: 0, model_cost: 0, render_fee: 0 };
+  let finishReason = '';
+  let stopReason = '';
 
   try {
     while (true) {
@@ -258,6 +270,10 @@ export async function chatCompletionsStream(
             continue;
           }
           const choiceDelta = parsed.choices?.[0]?.delta;
+          const nextFinishReason = parsed.choices?.[0]?.finish_reason;
+          if (typeof nextFinishReason === 'string' && nextFinishReason) finishReason = nextFinishReason;
+          const nextStopReason = parsed.airgate?.stop_reason;
+          if (typeof nextStopReason === 'string' && nextStopReason) stopReason = nextStopReason;
           const reasoningDelta = choiceDelta?.reasoning_content;
           if (reasoningDelta) callbacks.onReasoning(reasoningDelta);
           const delta = choiceDelta?.content;
@@ -268,7 +284,7 @@ export async function chatCompletionsStream(
         }
       }
     }
-    await callbacks.onDone(usage);
+    await callbacks.onDone({ ...usage, finish_reason: finishReason, stop_reason: stopReason });
   } catch (err) {
     if (signal?.aborted) return;
     callbacks.onError(err instanceof Error ? err.message : 'stream failed');
@@ -287,11 +303,23 @@ function normalizeStreamUsage(raw: any, fallbackModel: string) {
   const promptTokens = Number(raw?.prompt_tokens ?? raw?.input_tokens);
   const completionTokens = Number(raw?.completion_tokens ?? raw?.output_tokens);
   const directCost = Number(raw?.cost ?? raw?.user_cost ?? raw?.account_cost);
+	const totalCost = Number.isFinite(directCost) ? Math.max(0, directCost) : 0;
+	const renderFeeRaw = Array.isArray(raw?.cost_details)
+		? raw.cost_details
+			.filter((item: any) => item?.key === 'document_render')
+			.reduce((sum: number, item: any) => {
+				const value = Number(item?.user_cost);
+				return sum + (Number.isFinite(value) ? Math.max(0, value) : 0);
+			}, 0)
+		: 0;
+	const renderFee = Math.min(totalCost, renderFeeRaw);
 
   return {
     input_tokens: Number.isFinite(promptTokens) ? promptTokens : metricValue('input_tokens'),
     output_tokens: Number.isFinite(completionTokens) ? completionTokens : metricValue('output_tokens'),
     model: String(raw?.model || fallbackModel || ''),
-    cost: Number.isFinite(directCost) ? directCost : 0,
+		cost: totalCost,
+		model_cost: Math.max(0, totalCost - renderFee),
+		render_fee: renderFee,
   };
 }

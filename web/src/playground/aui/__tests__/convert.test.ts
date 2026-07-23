@@ -22,6 +22,7 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     input_tokens: 12,
     output_tokens: 34,
     cost: 0.0021,
+	render_fee: 0.0004,
     created_at: '2026-07-14T08:00:00Z',
     ...overrides,
   };
@@ -61,6 +62,7 @@ describe('toThreadMessageLike', () => {
       model: 'claude-sonnet-4-5',
       platform: 'claude',
       cost: 0.0021,
+	  render_fee: 0.0004,
       input_tokens: 12,
       output_tokens: 34,
       reasoning_effort: 'high',

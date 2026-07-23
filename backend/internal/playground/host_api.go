@@ -21,6 +21,7 @@ const (
 	hostMethodAssetsGetURL   = "assets.get_url"
 	hostMethodAssetsGetBytes = "assets.get_bytes"
 	hostMethodAssetsDelete   = "assets.delete"
+	hostMethodUsageRecord    = "usage.record"
 )
 
 // hostModelInfo 是 models.list 返回的单个模型条目（转发给前端选择器）。
@@ -72,14 +73,16 @@ func hostListModels(ctx context.Context, host sdk.Host, platform string) ([]host
 }
 
 type hostForwardRequest struct {
-	UserID  int64
-	GroupID int64
-	Model   string
-	Method  string
-	Path    string
-	Headers http.Header
-	Body    []byte
-	Stream  bool
+	UserID    int64
+	GroupID   int64
+	RequestID string
+	TraceID   string
+	Model     string
+	Method    string
+	Path      string
+	Headers   http.Header
+	Body      []byte
+	Stream    bool
 }
 
 type hostForwardResponse struct {
@@ -105,12 +108,18 @@ type hostAssetBytes struct {
 }
 
 func hostInvoke(ctx context.Context, host sdk.Host, method string, payload map[string]interface{}) (map[string]interface{}, error) {
+	return hostInvokeWithOptions(ctx, host, method, payload, "", nil)
+}
+
+func hostInvokeWithOptions(ctx context.Context, host sdk.Host, method string, payload map[string]interface{}, idempotencyKey string, metadata map[string]string) (map[string]interface{}, error) {
 	if host == nil {
 		return nil, fmt.Errorf("core host 未启用")
 	}
 	resp, err := host.Invoke(ctx, sdk.HostInvokeRequest{
-		Method:  method,
-		Payload: payload,
+		Method:         method,
+		Payload:        payload,
+		IdempotencyKey: idempotencyKey,
+		Metadata:       metadata,
 	})
 	if err != nil {
 		return nil, err
@@ -125,6 +134,15 @@ func hostInvoke(ctx context.Context, host sdk.Host, method string, payload map[s
 		return nil, fmt.Errorf("core 方法 %s 返回错误", method)
 	}
 	return resp.Payload, nil
+}
+
+func hostRecordUsage(ctx context.Context, host sdk.Host, payload map[string]interface{}, idempotencyKey string) (*sdk.Usage, error) {
+	result, err := hostInvokeWithOptions(ctx, host, hostMethodUsageRecord, payload, idempotencyKey, nil)
+	if err != nil {
+		return nil, err
+	}
+	usage := usageFromPayload(firstPayloadValue(result, "usage"))
+	return usage, nil
 }
 
 func hostForward(ctx context.Context, host sdk.Host, req hostForwardRequest) (*hostForwardResponse, error) {
@@ -180,14 +198,16 @@ func hostForwardStream(ctx context.Context, host sdk.Host, req hostForwardReques
 
 func hostForwardPayload(req hostForwardRequest) map[string]interface{} {
 	return map[string]interface{}{
-		"user_id":  req.UserID,
-		"group_id": req.GroupID,
-		"model":    req.Model,
-		"method":   req.Method,
-		"path":     req.Path,
-		"headers":  headerPayload(req.Headers),
-		"body":     string(req.Body),
-		"stream":   req.Stream,
+		"user_id":    req.UserID,
+		"group_id":   req.GroupID,
+		"request_id": req.RequestID,
+		"trace_id":   req.TraceID,
+		"model":      req.Model,
+		"method":     req.Method,
+		"path":       req.Path,
+		"headers":    headerPayload(req.Headers),
+		"body":       string(req.Body),
+		"stream":     req.Stream,
 	}
 }
 

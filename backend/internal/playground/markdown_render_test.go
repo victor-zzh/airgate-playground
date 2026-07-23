@@ -18,6 +18,14 @@ func TestRenderDocumentHTMLSanitizesAndRenders(t *testing.T) {
 			t.Fatalf("output missing %q", want)
 		}
 	}
+	for _, want := range []string{"thead { display: table-header-group; }", "tr { page-break-inside: avoid;", "pre {"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("print pagination rule missing %q", want)
+		}
+	}
+	if strings.Contains(got, "table { border-collapse: collapse; width: 100%; margin: 0.8em 0; page-break-inside: avoid") {
+		t.Fatal("long tables must be allowed to span PDF pages")
+	}
 	for _, forbidden := range []string{"<script", "onerror", "javascript:alert"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("output must not contain %q:\n%s", forbidden, got)
@@ -36,5 +44,20 @@ func TestSanitizeDocumentTitle(t *testing.T) {
 	long := strings.Repeat("长", 200)
 	if got := sanitizeDocumentTitle(long); len([]rune(got)) != 80 {
 		t.Fatalf("title should truncate to 80 runes, got %d", len([]rune(got)))
+	}
+}
+
+func TestStripDuplicateLeadingTitle(t *testing.T) {
+	t.Parallel()
+	if got := stripDuplicateLeadingTitle("季度报告", "# 季度报告\n\n## 摘要\n正文"); got != "## 摘要\n正文" {
+		t.Fatalf("duplicate title not stripped: %q", got)
+	}
+	onlyTitle := "# 季度报告"
+	if got := stripDuplicateLeadingTitle("季度报告", onlyTitle); got != onlyTitle {
+		t.Fatalf("title-only document must stay non-empty: %q", got)
+	}
+	content := "# 其他标题\n正文"
+	if got := stripDuplicateLeadingTitle("季度报告", content); got != content {
+		t.Fatalf("different heading must remain: %q", got)
 	}
 }

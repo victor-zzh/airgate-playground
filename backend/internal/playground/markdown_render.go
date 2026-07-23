@@ -56,11 +56,11 @@ var docShellTemplate = template.Must(template.New("doc").Parse(`<!DOCTYPE html>
     font-family: 'Noto Sans CJK SC', 'Noto Sans SC', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
     font-size: 11pt;
     line-height: 1.65;
-    color: #1a1a1a;
+    color: #1e293b;
     margin: 0;
   }
-  h1 { font-size: 20pt; margin: 0 0 0.6em; border-bottom: 2px solid #e0e0e0; padding-bottom: 0.3em; }
-  h2 { font-size: 15pt; margin: 1.2em 0 0.5em; }
+  h1 { color: #0f172a; font-size: 20pt; margin: 0 0 0.6em; border-bottom: 3px solid #2563eb; padding-bottom: 0.3em; }
+  h2 { color: #2563eb; font-size: 15pt; margin: 1.2em 0 0.5em; }
   h3 { font-size: 12.5pt; margin: 1em 0 0.4em; }
   h2, h3, h4 { page-break-after: avoid; }
   p { margin: 0.5em 0; }
@@ -73,13 +73,15 @@ var docShellTemplate = template.Must(template.New("doc").Parse(`<!DOCTYPE html>
     white-space: pre-wrap;
     word-break: break-word;
     font-size: 9.5pt;
-    page-break-inside: avoid;
+    page-break-inside: auto;
   }
   code { font-family: 'Noto Sans Mono CJK SC', 'SF Mono', Menlo, Consolas, monospace; font-size: 0.92em; }
   p code, li code { background: #f2f2ef; border-radius: 4px; padding: 1px 4px; }
-  table { border-collapse: collapse; width: 100%; margin: 0.8em 0; page-break-inside: avoid; font-size: 10pt; }
+  table { border-collapse: collapse; width: 100%; margin: 0.8em 0; page-break-inside: auto; font-size: 10pt; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; page-break-after: auto; }
   th, td { border: 1px solid #d4d4d0; padding: 6px 9px; text-align: left; vertical-align: top; }
-  th { background: #f3f3f0; font-weight: 600; }
+  th { background: #e8eef8; color: #1e3a8a; font-weight: 600; }
   blockquote { border-left: 3px solid #d0d0cc; margin: 0.6em 0; padding: 0.1em 0 0.1em 12px; color: #555; }
   ul, ol { padding-left: 1.6em; margin: 0.5em 0; }
   hr { border: none; border-top: 1px solid #e0e0e0; margin: 1.2em 0; }

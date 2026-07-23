@@ -76,6 +76,7 @@ export function toThreadMessageLike(msg: Message): ThreadMessageLike {
         model: msg.model,
         platform: msg.platform,
         cost: msg.cost,
+		render_fee: msg.render_fee,
         input_tokens: msg.input_tokens,
         output_tokens: msg.output_tokens,
         ...(msg.reasoning_effort ? { reasoning_effort: msg.reasoning_effort } : {}),
