@@ -50,6 +50,103 @@ func TestCompileChatForwardPlanOpenAIInjectsSystemAndKeepsFields(t *testing.T) {
 	}
 }
 
+// TestCompileChatForwardPlanGeminiMatrix gemini 分支表驱动:复用 openai 白名单编译,
+// 直连 /v1/chat/completions,不做 SSE/JSON 归一化(gemini 插件直接吐标准 OpenAI 格式)。
+func TestCompileChatForwardPlanGeminiMatrix(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		model string
+		body  string
+		check func(t *testing.T, got map[string]any)
+	}{
+		{
+			name:  "basic_injects_system_and_keeps_fields",
+			model: "gemini-3.5-flash",
+			body:  `{"model":"gemini-3.5-flash","messages":[{"role":"user","content":"hi"}],"stream":true,"temperature":0.7,"max_tokens":1024}`,
+			check: func(t *testing.T, got map[string]any) {
+				if got["stream"] != true || got["temperature"] != 0.7 || got["max_tokens"] != float64(1024) {
+					t.Fatalf("whitelist fields changed: %+v", got)
+				}
+				messages := got["messages"].([]any)
+				if len(messages) != 2 {
+					t.Fatalf("messages len = %d, want 2 (system + user)", len(messages))
+				}
+				sys := messages[0].(map[string]any)
+				if sys["role"] != "system" || !strings.Contains(sys["content"].(string), "capable AI assistant") {
+					t.Fatalf("first message should be builtin system, got %+v", sys)
+				}
+				if user := messages[1].(map[string]any); user["role"] != "user" || user["content"] != "hi" {
+					t.Fatalf("user message changed: %+v", user)
+				}
+			},
+		},
+		{
+			name:  "image_data_url_passthrough",
+			model: "gemini-3.1-pro-preview",
+			body: `{"model":"gemini-3.1-pro-preview","messages":[{"role":"user","content":[
+				{"type":"text","text":"describe"},
+				{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}
+			]}],"stream":false}`,
+			check: func(t *testing.T, got map[string]any) {
+				if got["stream"] != false {
+					t.Fatalf("stream = %v, want false", got["stream"])
+				}
+				messages := got["messages"].([]any)
+				parts := messages[1].(map[string]any)["content"].([]any)
+				img := parts[1].(map[string]any)
+				if img["type"] != "image_url" {
+					t.Fatalf("image part type = %v, want image_url (OpenAI 格式原样透传)", img["type"])
+				}
+				if url := img["image_url"].(map[string]any)["url"]; url != "data:image/png;base64,aGVsbG8=" {
+					t.Fatalf("image data URL changed: %v", url)
+				}
+			},
+		},
+		{
+			name:  "strips_non_whitelist_fields",
+			model: "gemini-2.5-flash",
+			body:  `{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function"}],"logit_bias":{"1":2},"conversation_id":7}`,
+			check: func(t *testing.T, got map[string]any) {
+				for _, key := range []string{"tools", "logit_bias", "conversation_id"} {
+					if _, ok := got[key]; ok {
+						t.Fatalf("field %q should be stripped by whitelist: %+v", key, got)
+					}
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := compileChatForwardPlan("gemini", []byte(tc.body))
+			if err != nil {
+				t.Fatalf("compileChatForwardPlan() error = %v", err)
+			}
+			if plan.Platform != "gemini" {
+				t.Fatalf("platform = %q, want gemini", plan.Platform)
+			}
+			if plan.Path != "/v1/chat/completions" {
+				t.Fatalf("path = %q, want /v1/chat/completions", plan.Path)
+			}
+			if plan.NormalizeSSE || plan.NormalizeJSON {
+				t.Fatalf("NormalizeSSE/NormalizeJSON = %v/%v, want false/false (gemini 插件直吐标准 OpenAI 格式)", plan.NormalizeSSE, plan.NormalizeJSON)
+			}
+			if plan.ResponseModel != tc.model {
+				t.Fatalf("ResponseModel = %q, want %q", plan.ResponseModel, tc.model)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(plan.Body, &got); err != nil {
+				t.Fatalf("compiled body invalid: %v\n%s", err, plan.Body)
+			}
+			if got["model"] != tc.model {
+				t.Fatalf("model = %v, want %s", got["model"], tc.model)
+			}
+			tc.check(t, got)
+		})
+	}
+}
+
 func TestCompileChatForwardPlanClaudeCompilesMessagesRequest(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-sonnet-4-5-20250929",

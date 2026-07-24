@@ -485,6 +485,8 @@ func (p *Plugin) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 工具循环:开关开启且流式请求时接管(claude/openai 双协议)。
 	if stream {
 		if tools := p.enabledChatTools(); len(tools) > 0 {
+			// gemini 不进工具循环:gemini 插件伪流式(内容可能一次性到达)且首期
+			// 未验证 tool_calls 透传,web_search 等服务端工具暂不覆盖,走普通转发。
 			if lp := strings.ToLower(platform); lp == "claude" || lp == "anthropic" || lp == "openai" {
 				var loopReq openAIChatRequest
 				if err := json.Unmarshal(body, &loopReq); err != nil {
@@ -713,7 +715,7 @@ func (p *Plugin) handleGetUserInfo(w http.ResponseWriter, r *http.Request) {
 // chatModelPlatforms AI Chat 支持的平台，顺序即前端下拉的分组顺序。
 // 模型清单来自各网关插件的注册表（claude＝Max 号池网关声明的模型；
 // 转发始终走用户 API Key 所属分组，不会因选择模型改路由到别的分组）。
-var chatModelPlatforms = []string{"claude", "openai"}
+var chatModelPlatforms = []string{"claude", "openai", "gemini"}
 
 func (p *Plugin) handleListModels(w http.ResponseWriter, r *http.Request) {
 	models := make([]hostModelInfo, 0, 16)

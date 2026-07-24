@@ -133,6 +133,21 @@ func compileChatForwardPlanWithOpts(platform string, body []byte, opts compileOp
 			Body:          outBody,
 			ResponseModel: req.Model,
 		}, nil
+	case "gemini":
+		// gemini 插件对外即标准 OpenAI chat 协议(stream 时为标准 OpenAI SSE,
+		// 伪流式,内容可能一次性到达):复用 openai 的白名单编译,直连
+		// /v1/chat/completions,无需 SSE/JSON 归一化。
+		outBody, err := compileOpenAIChatBody(req, body, opts)
+		if err != nil {
+			return nil, err
+		}
+		return &chatForwardPlan{
+			Platform:      platform,
+			Model:         req.Model,
+			Path:          "/v1/chat/completions",
+			Body:          outBody,
+			ResponseModel: req.Model,
+		}, nil
 	case "claude", "anthropic":
 		compiled, err := compileClaudeMessagesBody(req, opts)
 		if err != nil {
